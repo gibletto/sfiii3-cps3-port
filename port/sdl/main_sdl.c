@@ -125,11 +125,26 @@ static void save_bmp(const char* path, s32 w, s32 h) {
     }
 }
 
-/* ---- sound: each frame's samples are queued to the audio device ---- */
+/* ---- sound: each frame's samples are queued to the audio device ----
+ *
+ * The device is opened at its own rate and the sound chip's 37287 Hz is converted here (SDL_AudioStream).
+ * Asking WASAPI to convert the odd rate itself made it drop about 8 ms of sound every second or so.
+ */
 
 static SDL_AudioDeviceID audio_dev;
+static SDL_AudioStream* audio_conv;
+static double audio_ratio;          /* device samples per sound chip sample */
 static double sound_acc;
 static s16 sound_buf[2 * 2048];
+static s16 conv_buf[2 * 4096];
+
+static void sound_queue(const s16* buf, u32 n) {
+    int got;
+    SDL_AudioStreamPut(audio_conv, buf, (int)(n * 4));
+    while ((got = SDL_AudioStreamGet(audio_conv, conv_buf, sizeof(conv_buf))) > 0) {
+        SDL_QueueAudio(audio_dev, conv_buf, (u32)got);
+    }
+}
 
 static void sound_open(void) {
     SDL_AudioSpec want, have;
@@ -137,17 +152,25 @@ static void sound_open(void) {
         return;
     }
     SDL_zero(want);
-    want.freq = (int)(CPS3_SOUND_RATE + 0.5);
+    want.freq = 48000;
     want.format = AUDIO_S16SYS;
     want.channels = 2;
-    want.samples = 512;
-    audio_dev = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);     /* SDL converts to the device's rate */
+    want.samples = 1024;
+    audio_dev = SDL_OpenAudioDevice(NULL, 0, &want, &have, SDL_AUDIO_ALLOW_FREQUENCY_CHANGE);
+    if (audio_dev != 0) {
+        audio_conv = SDL_NewAudioStream(AUDIO_S16SYS, 2, (int)(CPS3_SOUND_RATE + 0.5), AUDIO_S16SYS, 2, have.freq);
+        if (audio_conv == NULL) {
+            SDL_CloseAudioDevice(audio_dev);
+            audio_dev = 0;
+        }
+    }
     if (audio_dev == 0) {
         fprintf(stderr, "no sound: %s\n", SDL_GetError());
     } else {
         u32 n = (u32)(CPS3_SOUND_RATE / FRAME_HZ) * 3;
+        audio_ratio = have.freq / CPS3_SOUND_RATE;
         memset(sound_buf, 0, sizeof(sound_buf));
-        SDL_QueueAudio(audio_dev, sound_buf, n * 4);   /* three frames ahead */
+        sound_queue(sound_buf, n);      /* three frames ahead */
         SDL_PauseAudioDevice(audio_dev, 0);
     }
 }
@@ -159,7 +182,8 @@ static void sound_frame(void) {
     sound_acc -= n;
     if (audio_dev != 0) {
         /* the device's clock drifts from the frame rate: adjust a little to keep 2-6 frames queued */
-        u32 queued = SDL_GetQueuedAudioSize(audio_dev) / 4, per = (u32)(CPS3_SOUND_RATE / FRAME_HZ);
+        u32 queued = (u32)(SDL_GetQueuedAudioSize(audio_dev) / 4 / audio_ratio);
+        u32 per = (u32)(CPS3_SOUND_RATE / FRAME_HZ);
         if (queued > per * 6) {
             n -= n / 32;
         } else if (queued < per * 2) {
@@ -168,7 +192,7 @@ static void sound_frame(void) {
     }
     cps3_sound_render(sound_buf, n);
     if (audio_dev != 0) {
-        SDL_QueueAudio(audio_dev, sound_buf, n * 4);
+        sound_queue(sound_buf, n);
     }
 }
 
@@ -244,6 +268,7 @@ int main(int argc, char** argv) {
     }
     if (audio_dev != 0) {
         SDL_CloseAudioDevice(audio_dev);
+        SDL_FreeAudioStream(audio_conv);
     }
     SDL_DestroyTexture(tex);
     SDL_DestroyRenderer(ren);
