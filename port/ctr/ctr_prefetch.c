@@ -5,6 +5,13 @@
  * game mostly reads the ROM in order, so after each miss a thread reads the next few pages into spare buffers,
  * and they are moved into the cache between frames. It also reads the pages that queued graphics loads will need
  * (cps3_chr_dma_upcoming). The thread runs on the system core when it can, so its reads overlap the game.
+ *
+ * With nothing else to read, the thread also fills the cache slots that have never been used with the pages
+ * nobody has asked for yet, a few at a time, so later scenes find their graphics loaded. It never evicts a page,
+ * and it waits while the game is missing pages (a scene is loading). When the whole ROM fits, it is all in memory
+ * about ten seconds after the start.
+ *
+ * The thread also writes the settings EEPROM when the game changes it, so the SD card write does not stall a frame.
  */
 
 #include <stdio.h>
@@ -39,6 +46,21 @@ static volatile int quit;
 static Handle fh_thread, fh_main;   /* the graphics ROM file, opened once for each thread */
 static u32 file_size;
 static u32 queue_clock;
+
+/* the background fill: one job of up to FILL_PAGES pages in a row, read in one request */
+#define FILL_PAGES  4
+#define FILL_QUIET  30          /* frames without a miss before the fill goes on */
+enum { F_IDLE, F_QUEUED, F_READING, F_DONE, F_FINISHED };
+static struct {
+    volatile u32 state;
+    u32 first, n;
+    s32 slot[FILL_PAGES];
+    u32 next;                   /* the next page to look at */
+    u32 last_misses;
+    u32 quiet;
+    u8* buf;
+} fill;
+static Buf* find(u32 page);
 
 /* reads a page straight through FS (stdio costs about 2.7 ms more per 16 KB read) */
 static int raw_read(Handle h, u32 page, void* dst) {
@@ -81,10 +103,31 @@ static void reader_main(void* arg) {
         }
         if (next != NULL) {
             next->state = B_READING;
+        } else if (fill.state == F_QUEUED) {
+            fill.state = F_READING;
         }
         LightLock_Unlock(&lock);
+        if (next == NULL && fill.state == F_READING) {
+            u32 k, got = 0, want = fill.n * PAGE_BYTES, ofs = fill.first * PAGE_BYTES;
+            if (ofs + want > file_size) {
+                want = file_size - ofs;
+                memset(fill.buf + want, 0, fill.n * PAGE_BYTES - want);
+            }
+            if (R_FAILED(FSFILE_Read(fh_thread, &got, ofs, fill.buf, want)) || got != want) {
+                fill.n = 0;             /* the slots go back unused */
+            }
+            for (k = 0; k < fill.n; k++) {
+                memcpy(cps3_user5_slot_mem((u32)fill.slot[k]), fill.buf + k * PAGE_BYTES, PAGE_BYTES);
+            }
+            LightLock_Lock(&lock);
+            fill.state = F_DONE;
+            LightLock_Unlock(&lock);
+            continue;
+        }
         if (next == NULL) {
-            LightEvent_Wait(&wake);
+            if (!cps3_eeprom_flush()) {
+                LightEvent_Wait(&wake);
+            }
             continue;
         }
         raw_read(fh_thread, next->page, next->data);
@@ -242,10 +285,73 @@ static void hint_chr_loads(void) {
     }
 }
 
+/* between frames: hands in the last fill job and, when the game has not missed a page for a while, queues the next */
+static void fill_poll(void) {
+    u32 k, pages;
+    if (fill.state == F_FINISHED || fill.buf == NULL) {
+        return;
+    }
+    if (fill.state == F_DONE) {
+        for (k = 0; k < fill.n; k++) {
+            cps3_user5_fill((u32)fill.slot[k], fill.first + k);
+        }
+        for (; k < FILL_PAGES && fill.slot[k] >= 0; k++) {
+            cps3_user5_fill((u32)fill.slot[k], CPS3_USER5_PAGES);      /* a failed read: give the slot back */
+        }
+        fill.state = F_IDLE;
+    }
+    if (fill.state != F_IDLE) {
+        return;
+    }
+    if (cps3_user5_misses != fill.last_misses) {
+        fill.last_misses = cps3_user5_misses;
+        fill.quiet = FILL_QUIET;
+    }
+    if (fill.quiet != 0) {
+        fill.quiet--;
+        return;
+    }
+    pages = (file_size + PAGE_BYTES - 1) / PAGE_BYTES;
+    if (pages > CPS3_USER5_PAGES) {
+        pages = CPS3_USER5_PAGES;
+    }
+    LightLock_Lock(&lock);
+    while (fill.next < pages && (cps3_user5_cached(fill.next) || find(fill.next) != NULL)) {
+        fill.next++;
+    }
+    fill.first = fill.next;
+    fill.n = 0;
+    while (fill.n < FILL_PAGES && fill.next < pages && !cps3_user5_cached(fill.next) && find(fill.next) == NULL) {
+        s32 slot = cps3_user5_spare_slot();
+        if (slot < 0) {
+            break;
+        }
+        fill.slot[fill.n++] = slot;
+        fill.next++;
+    }
+    for (k = fill.n; k < FILL_PAGES; k++) {
+        fill.slot[k] = -1;
+    }
+    if (fill.n == 0) {
+        fill.state = F_FINISHED;        /* every page loaded, or no slot left */
+        LightLock_Unlock(&lock);
+        free(fill.buf);
+        fill.buf = NULL;
+        return;
+    }
+    fill.state = F_QUEUED;
+    LightLock_Unlock(&lock);
+    LightEvent_Signal(&wake);
+}
+
 void ctr_prefetch_poll(void) {
     u32 i;
     if (thread == NULL) {
         return;
+    }
+    fill_poll();
+    if (cps3_eeprom_pending()) {
+        LightEvent_Signal(&wake);       /* the thread saves it */
     }
     for (i = 0; i < BUFS; i++) {
         if (bufs[i].state == B_DONE) {
@@ -274,6 +380,9 @@ int ctr_prefetch_start(void) {
         return 0;
     }
     file_size = cps3_user5_file_size();
+    fill.buf = malloc(FILL_PAGES * PAGE_BYTES);     /* optional: without it, no background fill */
+    fill.state = F_IDLE;
+    fill.quiet = FILL_QUIET;
     for (i = 0; i < BUFS; i++) {
         bufs[i].data = malloc(PAGE_BYTES);
         bufs[i].state = B_FREE;
@@ -297,12 +406,14 @@ int ctr_prefetch_start(void) {
         return 0;
     }
     cps3_user5_set_reader(&reader);
+    cps3_eeprom_defer(1);
     return 1;
 }
 
 void ctr_prefetch_stop(void) {
     if (thread != NULL) {
         cps3_user5_set_reader(NULL);
+        fill.state = F_FINISHED;
         quit = 1;
         LightEvent_Signal(&wake);
         threadJoin(thread, U64_MAX);
@@ -310,5 +421,7 @@ void ctr_prefetch_stop(void) {
         thread = NULL;
         FSFILE_Close(fh_thread);
         FSFILE_Close(fh_main);
+        cps3_eeprom_defer(0);
+        cps3_eeprom_flush();            /* a change not saved yet */
     }
 }

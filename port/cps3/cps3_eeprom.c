@@ -34,6 +34,30 @@ void cps3_eeprom_load(const char* path) {
     fclose(f);
 }
 
+static volatile int dirty;         /* changed, not saved yet (deferred saving) */
+static int deferred;
+
+/* Deferred saving: a change is only marked, and cps3_eeprom_flush (on any thread) saves it. */
+void cps3_eeprom_defer(int on) {
+    deferred = on;
+}
+
+int cps3_eeprom_pending(void) {
+    return dirty;
+}
+
+static void save(void);
+
+/* saves a marked change; 1 if there was one. A change made during the save marks it again. */
+int cps3_eeprom_flush(void) {
+    if (!dirty) {
+        return 0;
+    }
+    dirty = 0;
+    save();
+    return 1;
+}
+
 static void save(void) {
     FILE* f;
     u8 b[EEPROM_WORDS * 2];
@@ -74,9 +98,13 @@ s32 cps3_eeprom_write(s16 n, volatile u16* rom, u16* buf) {
             changed = 1;
         }
     }
-    /* Save only on change. An SD card write costs a 3DS a frame or more. */
+    /* Save only on change. An SD card write costs a 3DS a frame or more, so it may be left to another thread. */
     if (changed) {
-        save();
+        if (deferred) {
+            dirty = 1;
+        } else {
+            save();
+        }
     }
     return 0;
 }

@@ -61,6 +61,11 @@ int cps3_user5_cached(u32 page);
 int cps3_user5_ready(u32 page);
 void cps3_user5_soon(u32 page);             /* ask the reader for it now */
 void cps3_user5_install(u32 page, const void* data);   /* call from the game thread */
+/* background fill, from the game thread: a slot never used (-1 if none), its memory, then the page it holds */
+s32 cps3_user5_spare_slot(void);
+u32* cps3_user5_slot_mem(u32 slot);
+void cps3_user5_fill(u32 slot, u32 page);
+extern u32 cps3_user5_misses;               /* pages the game had to wait for */
 extern u8 cps3_user5_ahead[CPS3_USER5_PAGES];   /* read ahead, not used yet */
 void cps3_user5_ahead_used(u32 page);
 const char* cps3_user5_path(void);          /* the streamed file, or NULL */
@@ -154,6 +159,9 @@ extern u32 cps3_gscroll_buff[8];
 void cps3_eeprom_load(const char* path);
 s32 cps3_eeprom_read(s16 n, volatile u16* rom, u16* buf);
 s32 cps3_eeprom_write(s16 n, volatile u16* rom, u16* buf);
+void cps3_eeprom_defer(int on);     /* changes are only marked; cps3_eeprom_flush saves them */
+int cps3_eeprom_pending(void);
+int cps3_eeprom_flush(void);
 
 /* interrupts (cps3_kernel.c) */
 void cps3_dma_end_irq(void);

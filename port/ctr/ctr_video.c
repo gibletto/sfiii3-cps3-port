@@ -97,7 +97,7 @@ static u16* idx;                    /* MAX_IDX, linear */
 static u32 nquads, nextra, nshadows, nidx;
 #define SHADOW(i) (quads[QPOOL - 1 - (i)])
 static u16 qkey[QPOOL];             /* per quad: its palette (sprites: base / 64) */
-static u8 qbank[MAX_QUADS];         /* per sprite quad: its texture bank */
+static u8 qbank[QPOOL];             /* per quad: its texture bank (sprites, and their copies under shadows) */
 static u16* order;                  /* sprite quads sorted by palette */
 static u32 bucket[2048 + 1];
 static u32 count[2048];             /* per palette: number of quads */
@@ -111,6 +111,9 @@ static const CLIP* walk_clip;       /* the visible part of the line buffer */
 static u16 tile_swz[256];           /* tile pixel (y * 16 + x) -> offset in the bank texture */
 static u16 tile_swz4[64];           /* the same for 2x2 pixel blocks, in 32-bit words */
 static u8 tile_bits[0x8000];        /* per tile: the OR of its pens */
+static u16 tile_vals[0x8000];       /* per tile: bit n if a pen (not 0) has low bits n; see tile_values */
+static u8 tile_vals_ok[0x8000];     /* tile_vals is up to date */
+static u16 shadow_vals[MAX_SHADOWS];    /* per shadow quad: the stencil values its pixels can set */
 static u16 fg_prev[0x4000];         /* text layer tiles as last converted */
 static u8 fg_used[512];             /* per text tile: not blank */
 static u32 chan12[32];              /* a 5-bit colour channel as a LUT entry */
@@ -318,24 +321,53 @@ static void walk_reset(void) {
     memset(bucket_banks, 0, sizeof(bucket_banks));
 }
 
-/* a quad showing texels [tu0, tu1) x [tv0, tv1) of a tile (reversed ranges flip) */
-static void tile_quad(u32 code, u32 color, s32 gran, s32 trans, s32 x0, s32 y0, s32 x1, s32 y1, float tu0,
-                      float tv0, float tu1, float tv1) {
+/* bit n set if the tile has a pen (not 0) whose low four bits are n */
+static u32 tile_values(u32 code) {
+    if (!tile_vals_ok[code]) {
+        const u8* s = &cps3_char_ram[code * 256];
+        u32 k, m = 0;
+        for (k = 0; k < 256; k++) {
+            if (s[k] != 0) {
+                m |= 1u << (s[k] & 0xF);
+            }
+        }
+        tile_vals[code] = (u16)m;
+        tile_vals_ok[code] = 1;
+    }
+    return tile_vals[code];
+}
+
+/* the stencil values a shadow tile's pixels set (draw_shadows): a 64-colour shadow sets the low four bits of
+   the pen; a 256-colour one sets 4 for odd pens and 8 for every pen if the colour is odd */
+static u32 shadow_values(u32 code, u32 color, s32 kind) {
+    u32 m = tile_values(code);
+    if (kind == Q_SHADOW64) {
+        return m & ~1u;
+    } else {
+        u32 c8 = (color & 1) ? 8 : 0;
+        return ((m & 0xAAAA) ? 1u << (4 | c8) : 0) | ((m & 0x5555) && c8 ? 1u << c8 : 0);
+    }
+}
+
+/* a visible tile still waiting for its DMA: finish it, then walk again */
+static void tile_check(u32 code, s32 x0, s32 y0, s32 x1, s32 y1) {
+    if (cps3_char_tile_pending(code) && x0 <= walk_clip->r && x1 > walk_clip->l && y0 <= walk_clip->b &&
+        y1 > walk_clip->t) {
+        cps3_chr_dma_need(code);
+        rewalk = 1;
+    }
+}
+
+/* a quad showing texels [tu0, tu1) x [tv0, tv1) from a tile (reversed ranges flip). The texels may run on into
+   the tiles after it in the same row of the bank texture; pens is the OR of their pens. */
+static void tiles_quad(u32 code, u32 color, s32 gran, s32 trans, s32 x0, s32 y0, s32 x1, s32 y1, float tu0,
+                       float tv0, float tu1, float tv1, u32 pens) {
     Quad* q;
     u32 w = code & 0xFFF;
     float bx = (float)((w & 63) * 16);
     float by = (float)((w >> 6) * 16);
     s32 kind = Q_OPAQUE;
     u32 bits = 0;
-    if (x1 <= 0 || x0 >= RB_W || y1 <= 0 || y0 >= RB_H) {
-        return;
-    }
-    if (cps3_char_tile_pending(code) && x0 <= walk_clip->r && x1 > walk_clip->l && y0 <= walk_clip->b &&
-        y1 > walk_clip->t) {
-        /* a visible tile still waiting for its DMA: finish it, then walk again */
-        cps3_chr_dma_need(code);
-        rewalk = 1;
-    }
     if (trans == TRANS_PEN_INDEX_BLEND) {
         /* stencil bit n stands for colour bit 13 + n */
         if (gran == 64) {
@@ -349,9 +381,12 @@ static void tile_quad(u32 code, u32 color, s32 gran, s32 trans, s32 x0, s32 y0, 
             return;
         }
     }
-    q = new_quad(kind, (u32)(gran * color) & 0x1FFFF, code >> 12, tile_bits[code]);
+    q = new_quad(kind, (u32)(gran * color) & 0x1FFFF, code >> 12, pens);
     if (q == NULL) {
         return;
+    }
+    if (kind != Q_OPAQUE) {
+        shadow_vals[nshadows - 1] = (u16)shadow_values(code, color, kind);
     }
     q->x0 = (s16)x0;
     q->y0 = (s16)y0;
@@ -367,6 +402,71 @@ static void tile_quad(u32 code, u32 color, s32 gran, s32 trans, s32 x0, s32 y0, 
     q->bits = (u8)bits;
     q->depth = walk_depth;
     walk_deep |= walk_depth != 0;
+}
+
+static void tile_quad(u32 code, u32 color, s32 gran, s32 trans, s32 x0, s32 y0, s32 x1, s32 y1, float tu0,
+                      float tv0, float tu1, float tv1) {
+    if (x1 <= 0 || x0 >= RB_W || y1 <= 0 || y0 >= RB_H) {
+        return;
+    }
+    tile_check(code, x0, y0, x1, y1);
+    tiles_quad(code, color, gran, trans, x0, y0, x1, y1, tu0, tv0, tu1, tv1, tile_bits[code]);
+}
+
+/* the stencil values the shadows can leave: their own, and if two of them overlap, the ORs of those */
+static u32 shadow_possible(void) {
+    u32 m = 0, i, j, overlap = nshadows > 64;
+    for (i = 0; i < nshadows; i++) {
+        const Quad* q = &SHADOW(i);
+        m |= shadow_vals[i];
+        for (j = 0; j < i && !overlap; j++) {
+            const Quad* o = &SHADOW(j);
+            overlap = o->x0 < q->x1 && q->x0 < o->x1 && o->y0 < q->y1 && q->y0 < o->y1;
+        }
+    }
+    if (overlap) {
+        u32 grown;
+        do {
+            grown = m;
+            for (i = 1; i < 16; i++) {
+                for (j = 1; j < 16; j++) {
+                    if (((m >> i) & 1) && ((m >> j) & 1)) {
+                        m |= 1u << (i | j);
+                    }
+                }
+            }
+        } while (m != grown);
+    }
+    return m & ~1u;
+}
+
+/* quad n, or a copy of it cropped to the area (inclusive bounds), with the same texels at each pixel */
+static u32 crop_quad(u32 n, const CLIP* a) {
+    const Quad* q = &quads[n];
+    Quad* c;
+    s32 x0 = q->x0 > a->l ? q->x0 : a->l, x1 = q->x1 < a->r + 1 ? q->x1 : a->r + 1;
+    s32 y0 = q->y0 > a->t ? q->y0 : a->t, y1 = q->y1 < a->b + 1 ? q->y1 : a->b + 1;
+    float du, dv;
+    if (x0 == q->x0 && x1 == q->x1 && y0 == q->y0 && y1 == q->y1) {
+        return n;
+    }
+    c = new_extra();
+    if (c == NULL) {
+        return n;
+    }
+    *c = *q;
+    du = (q->u1 - q->u0) / (float)(q->x1 - q->x0);
+    dv = (q->v1 - q->v0) / (float)(q->y1 - q->y0);
+    c->x0 = (s16)x0;
+    c->x1 = (s16)x1;
+    c->y0 = (s16)y0;
+    c->y1 = (s16)y1;
+    c->u0 = q->u0 + du * (float)(x0 - q->x0);
+    c->u1 = q->u0 + du * (float)(x1 - q->x0);
+    c->v0 = q->v0 + dv * (float)(y0 - q->y0);
+    c->v1 = q->v0 + dv * (float)(y1 - q->y0);
+    qbank[quad_number(c)] = qbank[n];
+    return quad_number(c);
 }
 
 /* a 16x16 tile at (sx, sy), scaled (MAME's draw_tile16) */
@@ -388,31 +488,80 @@ static void emit_tile16(u32 code, u32 color, s32 gran, s32 flipx, s32 flipy, s32
     tile_quad(code, color, gran, trans, sx, sy, sx + sw, sy + sh, u0, v0, u1, v1);
 }
 
-/* n screen lines of a tilemap that share one map row and one scroll */
+/* n screen lines of a tilemap that share one map row and one scroll. Opaque tiles next to each other in the bank
+   texture (the next tile number, or the one before when flipped, in the same texture row, same palette and flags)
+   are drawn as one quad; opaque tiles with no pixel are left out. */
 static void tilemap_run(u32 mapbase, s32 xflip_mask, s32 scrollx, s32 tileline, s32 sub0, s32 dir, s32 y, s32 n,
                         const CLIP* clip) {
-    s32 x;
-    for (x = clip->l / 16; x < clip->r / 16 + 2; x++) {
-        u32 dat = SPRITE_RAM32(mapbase + (tileline & 63) * 64 + (((x + scrollx / 16) & 63) ^ xflip_mask));
-        u32 tileno = ((dat & 0xFFFE0000) >> 17) % 0x8000;
-        s32 xflip = ((dat >> 12) & 1) ^ (xflip_mask & 1);
-        s32 yflip = (dat >> 11) & 1;
-        s32 alpha = (dat >> 10) & 1;
-        s32 bpp = (dat >> 9) & 1;
-        u32 colour = dat & 0x1FF;
-        s32 r0 = yflip ? 15 - sub0 : sub0;
-        s32 step = yflip ? -dir : dir;
-        s32 sx = x * 16 - scrollx % 16;
-        float tv0, tv1;
-        if (step >= 0) {
-            tv0 = (float)r0;
-            tv1 = (float)(r0 + n);
-        } else {
-            tv0 = (float)(r0 + 1);
-            tv1 = (float)(r0 + 1 - n);
+    s32 x, x_end = clip->r / 16 + 2;
+    u32 seg_dat = 0, seg_first = 0, seg_last = 0, seg_pens = 0;
+    s32 seg_n = 0, seg_x = 0;
+    float tv0 = 0.0f, tv1 = 0.0f;
+    for (x = clip->l / 16; x <= x_end; x++) {
+        u32 dat = 0, tileno = 0;
+        s32 xflip = 0, sx = x * 16 - scrollx % 16;
+        int merges = 0;
+        if (x < x_end) {
+            dat = SPRITE_RAM32(mapbase + (tileline & 63) * 64 + (((x + scrollx / 16) & 63) ^ xflip_mask));
+            tileno = ((dat & 0xFFFE0000) >> 17) % 0x8000;
+            xflip = ((dat >> 12) & 1) ^ (xflip_mask & 1);
+            if (!((dat >> 10) & 1)) {
+                /* opaque; a tile with no pixel ends the run of tiles */
+                tile_check(tileno, sx, y, sx + 16, y + n);
+                merges = seg_n > 0 && tile_bits[tileno] != 0 && (dat & 0x1FFFF) == (seg_dat & 0x1FFFF) &&
+                         tileno == (xflip ? seg_last - 1 : seg_last + 1) && (tileno >> 6) == (seg_last >> 6);
+            }
         }
-        tile_quad(tileno, colour, bpp ? 64 : 256, alpha ? TRANS_PEN_INDEX_BLEND : TRANS_PEN_INDEX, sx, y, sx + 16,
-                  y + n, xflip ? 16.0f : 0.0f, tv0, xflip ? 0.0f : 16.0f, tv1);
+        if (merges) {
+            seg_last = tileno;
+            seg_pens |= tile_bits[tileno];
+            seg_n++;
+            continue;
+        }
+        if (seg_n > 0) {
+            /* draw the run of tiles so far */
+            s32 x0 = seg_x, x1 = seg_x + 16 * seg_n;
+            s32 bpp = (seg_dat >> 9) & 1;
+            if (x1 > 0 && x0 < RB_W && y + n > 0 && y < RB_H) {
+                if ((seg_dat >> 12 & 1) ^ (xflip_mask & 1)) {
+                    tiles_quad(seg_last, seg_dat & 0x1FF, bpp ? 64 : 256, TRANS_PEN_INDEX, x0, y, x1, y + n,
+                               16.0f * seg_n, tv0, 0.0f, tv1, seg_pens);
+                } else {
+                    tiles_quad(seg_first, seg_dat & 0x1FF, bpp ? 64 : 256, TRANS_PEN_INDEX, x0, y, x1, y + n, 0.0f,
+                               tv0, 16.0f * seg_n, tv1, seg_pens);
+                }
+            }
+            seg_n = 0;
+        }
+        if (x >= x_end) {
+            break;
+        }
+        {
+            s32 yflip = (dat >> 11) & 1;
+            s32 r0 = yflip ? 15 - sub0 : sub0;
+            s32 step = yflip ? -dir : dir;
+            float v0, v1;
+            if (step >= 0) {
+                v0 = (float)r0;
+                v1 = (float)(r0 + n);
+            } else {
+                v0 = (float)(r0 + 1);
+                v1 = (float)(r0 + 1 - n);
+            }
+            if ((dat >> 10) & 1) {
+                /* shadow: one tile at a time, as each sets its own stencil bits */
+                tile_quad(tileno, dat & 0x1FF, (dat >> 9) & 1 ? 64 : 256, TRANS_PEN_INDEX_BLEND, sx, y, sx + 16,
+                          y + n, xflip ? 16.0f : 0.0f, v0, xflip ? 0.0f : 16.0f, v1);
+            } else if (tile_bits[tileno] != 0) {
+                seg_dat = dat;
+                seg_first = seg_last = tileno;
+                seg_pens = tile_bits[tileno];
+                seg_n = 1;
+                seg_x = sx;
+                tv0 = v0;
+                tv1 = v1;
+            }
+        }
     }
 }
 
@@ -675,6 +824,7 @@ static void sync_char(void) {
                 orbits |= orbits >> 16;
                 orbits |= orbits >> 8;
                 tile_bits[t] = (u8)orbits;
+                tile_vals_ok[t] = 0;
                 if (base < lo[bank]) {
                     lo[bank] = base;
                 }
@@ -796,7 +946,7 @@ static u32 colour_abgr(u16 col) {
 static void draw_shadows(void) {
     static u32 fbound[2048 + 1];    /* per palette: start of its quads under the shadows */
     CLIP area = { 0x7FFF, -0x7FFF, 0x7FFF, -0x7FFF };
-    u32 setbits = 0, v, i, b, k;
+    u32 setbits = 0, possible, v, i, b, k;
     s32 bank = -1;
     u32 first;
 
@@ -854,8 +1004,9 @@ static void draw_shadows(void) {
     if (setbits == 0) {
         return;
     }
+    possible = shadow_possible();
 
-    /* the sprite quads under the shadows, by palette */
+    /* the sprite quads under the shadows, by palette, cropped to the shadows' box */
     list_start();
     for (i = 0; i < 2048; i++) {
         u32 j;
@@ -865,7 +1016,7 @@ static void draw_shadows(void) {
             if (q->x1 <= area.l || q->x0 > area.r || q->y1 <= area.t || q->y0 > area.b) {
                 continue;
             }
-            push_quad(order[j]);
+            push_quad(crop_quad(order[j], &area));
         }
         fbound[i + 1] = nidx;
     }
@@ -873,7 +1024,7 @@ static void draw_shadows(void) {
     /* for each stencil value, redraw those pixels from colour RAM (pen | base | v << 13) */
     lut_alpha(0);
     for (v = 1; v < 16; v++) {
-        if ((v & setbits) != v) {
+        if ((v & setbits) != v || !((possible >> v) & 1)) {
             continue;
         }
         C3D_StencilTest(true, GPU_EQUAL, (int)v, 0xF, 0);

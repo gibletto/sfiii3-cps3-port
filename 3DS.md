@@ -47,7 +47,8 @@ An original 3DS has a 268 MHz processor and 64 MB of memory for the game. The ar
 plain files on the SD card ("One-time ROM unpack"), so it can read any part of them quickly. The port keeps as
 many of the graphics in memory as fits and reads the rest from the SD card as needed. A background thread on
 the 3DS's second core guesses what comes next and reads it early, including everything a scene load has queued,
-so the game rarely waits for the card. When it does, a read takes about 4.5 ms.
+so the game rarely waits for the card. When it does, a read takes about 4.5 ms. While nothing else needs the
+card, the same thread loads the graphics nobody has asked for yet into the free memory.
 
 How much fits depends on how the game is started. The CIA asks the 3DS for its 80 MB memory mode (the HOME
 Menu still works), which leaves room for about 34 MB of the graphics. The 3dsx gets the usual 64 MB, enough for

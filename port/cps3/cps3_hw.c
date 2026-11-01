@@ -41,6 +41,10 @@ static u32 user5_file_size;
 static u32 user5_slots;
 static u32** user5_slot_mem;
 static u32* user5_slot_page;
+static u32* user5_free;             /* slots never used, taken from the end */
+static u32 user5_nfree;
+static u8* user5_slot_busy;         /* held for the background fill */
+u32 cps3_user5_misses;              /* pages read for the game on the spot */
 static u32 user5_hand;
 static u32 user5_reserve;
 static const Cps3User5Reader* user5_reader;
@@ -59,10 +63,18 @@ u32 cps3_user5_cached_pages(void) {
    An SD card read costs a 3DS about half a frame. */
 static u32* claim_slot(u32 page) {
     u32 slot;
+    if (user5_nfree != 0) {
+        slot = user5_free[--user5_nfree];
+        user5_slot_page[slot] = page;
+        return user5_slot_mem[slot];
+    }
     for (;;) {
         u32 old;
         slot = user5_hand;
         user5_hand = (user5_hand + 1) % user5_slots;
+        if (user5_slot_busy[slot]) {
+            continue;
+        }
         old = user5_slot_page[slot];
         if (old == ~0u || !cps3_user5_ref[old]) {
             break;
@@ -86,6 +98,7 @@ u32* cps3_user5_fault(u32 page) {
         return zero_page;
     }
     mem = claim_slot(page);
+    cps3_user5_misses++;
     if (user5_reader != NULL && user5_reader->take(page, mem)) {
         /* read ahead */
     } else if (user5_reader != NULL && user5_reader->read != NULL && user5_reader->read(page, mem)) {
@@ -103,6 +116,34 @@ u32* cps3_user5_fault(u32 page) {
         user5_reader->ahead(page);
     }
     return mem;
+}
+
+/* Background fill: a slot never used, held until cps3_user5_fill; -1 when there is none left */
+s32 cps3_user5_spare_slot(void) {
+    u32 slot;
+    if (user5_nfree == 0) {
+        return -1;
+    }
+    slot = user5_free[--user5_nfree];
+    user5_slot_busy[slot] = 1;
+    return (s32)slot;
+}
+
+u32* cps3_user5_slot_mem(u32 slot) {
+    return user5_slot_mem[slot];
+}
+
+/* the held slot now holds the page; if the game loaded the page meanwhile, the slot goes back */
+void cps3_user5_fill(u32 slot, u32 page) {
+    user5_slot_busy[slot] = 0;
+    if (page >= CPS3_USER5_PAGES || cps3_user5_page[page] != NULL) {
+        user5_free[user5_nfree++] = slot;
+        return;
+    }
+    user5_slot_page[slot] = page;
+    cps3_user5_ref[page] = 0;
+    cps3_user5_ahead[page] = 0;
+    cps3_user5_page[page] = user5_slot_mem[slot];
 }
 
 /* Adds a read-ahead page. It is not marked used, so it is evicted first if unused. */
@@ -184,7 +225,9 @@ static s32 open_user5_stream(const char* dir) {
     user5_file_size = (u32)ftell(user5_file);
     user5_slot_mem = calloc(user5_slots, sizeof(u32*));
     user5_slot_page = malloc(user5_slots * sizeof(u32));
-    if (user5_slot_mem == NULL || user5_slot_page == NULL) {
+    user5_free = malloc(user5_slots * sizeof(u32));
+    user5_slot_busy = calloc(user5_slots, 1);
+    if (user5_slot_mem == NULL || user5_slot_page == NULL || user5_free == NULL || user5_slot_busy == NULL) {
         fprintf(stderr, "out of memory for the graphics ROM cache\n");
         return -1;
     }
@@ -207,6 +250,11 @@ static s32 open_user5_stream(const char* dir) {
     }
     user5_slots = i;
     free(hold);
+    /* every slot starts free, slot 0 taken first */
+    for (i = 0; i < user5_slots; i++) {
+        user5_free[i] = user5_slots - 1 - i;
+    }
+    user5_nfree = user5_slots;
     if (user5_slots < 2) {
         fprintf(stderr, "out of memory for the graphics ROM cache\n");
         return -1;
