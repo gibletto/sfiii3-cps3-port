@@ -3,8 +3,8 @@
 ## No game data
 
 This repository holds source code only. The game's graphics, sound and program data come from a ROM set the
-user owns: the PC version reads it at start-up (`port/cps3/cps3_romset.c`), and for the 3DS it is converted on
-the user's machine by `port/tools/prepare_rom.py`.
+user owns, read by `port/cps3/cps3_romset.c`: the PC version loads it at start-up, and the 3DS version unpacks
+it to files on the SD card the first time it runs.
 
 ## Libraries in the releases
 

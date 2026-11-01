@@ -14,14 +14,9 @@ arcade board did (memory, the task scheduler, the video and sound chips) and a f
 
 ## The ROM set
 
-The PC version reads `sfiii3nr1.zip` as it is: put it in `roms` next to `sf3.exe`.
-
-The 3DS version needs it converted first, because it streams the graphics from the SD card:
-
-    python port/tools/prepare_rom.py <sfiii3nr1.zip> rom-data
-
-This writes `bios.bin`, `cg.bin` and `user5.bin` into `rom-data`. The game saves its settings next to the ROM
-files as `eeprom.bin`.
+Both versions take `sfiii3nr1.zip` as it is. The PC version reads it from `roms` next to `sf3.exe`. The 3DS
+version reads it from `sdmc:/sf3/` and, the first time it runs, unpacks it into `sdmc:/sf3/rom-data`, because
+it streams the graphics from the SD card.
 
 ## PC (Windows, SDL2)
 
@@ -33,8 +28,8 @@ Build with MSYS2's **mingw32** environment (32-bit, because the game stores addr
     ninja -C build
     build/sf3 <sfiii3nr1.zip>
 
-With no argument it looks for `roms/sfiii3nr1.zip` next to `sf3.exe`, then for a `rom-data` folder. A folder
-argument works too, holding either the zip or the converted files.
+With no argument it looks for `roms/sfiii3nr1.zip` next to `sf3.exe`, then for a `rom-data` folder (the files
+the 3DS unpacks). A folder argument works too.
 
 | Keys | |
 |---|---|
@@ -94,7 +89,7 @@ Docker image and the Windows version with MSYS2, and attaches both zips to the r
     port/sys/       coroutines and division by zero, per platform
     port/sdl/       PC front end
     port/ctr/       3DS front end and GPU renderer
-    port/tools/     ROM preparation and build helpers
+    port/tools/     build helpers
 
 ## License
 

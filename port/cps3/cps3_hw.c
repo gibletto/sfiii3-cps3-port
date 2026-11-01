@@ -1,7 +1,8 @@
 /*
  * cps3_hw.c  Board memory blocks and ROM loading
  *
- * Loads the files prepare_rom.py makes: the BIOS, the graphics ROMs (user5) and the pattern directory.
+ * Loads the ROM files cps3_romset.c makes from the ROM set: the BIOS, the graphics ROMs (user5) and the pattern
+ * directory.
  * The directory is big-endian with program-ROM addresses, so it is converted to host records here.
  */
 
@@ -174,7 +175,7 @@ static s32 open_user5_stream(const char* dir) {
     snprintf(user5_path, sizeof(user5_path), "%s", path);
     user5_file = fopen(path, "rb");
     if (user5_file == NULL) {
-        fprintf(stderr, "cannot open %s (run port/tools/prepare_rom.py)\n", path);
+        fprintf(stderr, "cannot open %s\n", path);
         return -1;
     }
     fseek(user5_file, 0, SEEK_END);
@@ -273,7 +274,7 @@ static u8* read_file(const char* dir, const char* name, u32* size) {
     snprintf(path, sizeof(path), "%s/%s", dir, name);
     f = fopen(path, "rb");
     if (f == NULL) {
-        fprintf(stderr, "cannot open %s (run port/tools/prepare_rom.py)\n", path);
+        fprintf(stderr, "cannot open %s\n", path);
         return NULL;
     }
     fseek(f, 0, SEEK_END);

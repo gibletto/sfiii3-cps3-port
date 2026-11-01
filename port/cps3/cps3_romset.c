@@ -1,8 +1,8 @@
 /*
- * cps3_romset.c  Loads the game straight from MAME's ROM set zip (PC)
+ * cps3_romset.c  Reads MAME's ROM set zip: the PC loads it at start-up, the 3DS unpacks it to files once
  *
- * Does in memory what port/tools/prepare_rom.py does: decrypts the BIOS and the program SIMM that holds the
- * graphics pattern directory (cg.bin), and interleaves the graphics SIMMs into the graphics ROM (user5.bin).
+ * Decrypts the BIOS and the program SIMM that holds the graphics pattern directory (cg.bin), and interleaves the
+ * graphics SIMMs into the graphics ROM (user5.bin).
  *
  * Takes a non-merged sfiii3nr1.zip, or a split set (sfiii3nr1.zip next to its parent sfiii3.zip), or a merged
  * sfiii3.zip that keeps sfiii3nr1's own files in a sfiii3nr1 folder.
@@ -40,6 +40,10 @@ typedef struct {
 } Zip;
 
 static Zip zips[2];
+
+#define STEPS       37                  /* files read: the BIOS, 4 program chips, 32 graphics chips */
+static void (*progress_fn)(u32 done, u32 total);
+static u32 progress_done;
 
 static u32 le16(const u8* p) {
     return p[0] | (p[1] << 8);
@@ -192,6 +196,9 @@ static u8* read_member(const char* suffix, u32 size) {
         snprintf(cps3_romset_error, sizeof(cps3_romset_error), "%s in the ROM set is damaged (CRC).", e->name);
         return NULL;
     }
+    if (progress_fn != NULL) {
+        progress_fn(++progress_done, STEPS);
+    }
     return out;
 }
 
@@ -224,11 +231,14 @@ static void put_be32(u8* p, u32 w) {
     p[3] = (u8)w;
 }
 
-static int build(u8* bios, u8** cg_out, u32** user5_out) {
+/* where the graphics ROM goes, 4 MB (a chip pair) at a time */
+typedef int (*User5Put)(void* ctx, const u32* words, u32 count);
+
+static int build(u8* bios, u8** cg_out, User5Put put, void* ctx) {
     Zip* z;
-    u8* chip[4];
+    u8* chip[4] = { NULL, NULL, NULL, NULL };
     u8* cg;
-    u32* user5;
+    u32* words;
     u8* raw;
     char name[32];
     u32 i;
@@ -244,18 +254,21 @@ static int build(u8* bios, u8** cg_out, u32** user5_out) {
     free(raw);
 
     /* program SIMM 2, a byte lane per chip, encrypted: its start is the pattern directory */
-    for (c = 0; c < 4; c++) {
+    cg = malloc(CG_SIZE);
+    for (c = 0; c < 4 && cg != NULL; c++) {
         snprintf(name, sizeof(name), "sfiii3-simm2.%d", c);
         if ((chip[c] = read_member(name, CHIP)) == NULL) {
-            while (c-- > 0) {
-                free(chip[c]);
-            }
-            return 0;
+            break;
         }
     }
-    cg = malloc(CG_SIZE);
-    if (cg == NULL) {
-        snprintf(cps3_romset_error, sizeof(cps3_romset_error), "Out of memory.");
+    if (cg == NULL || c < 4) {
+        if (cg == NULL) {
+            snprintf(cps3_romset_error, sizeof(cps3_romset_error), "Out of memory.");
+        }
+        for (c = 0; c < 4; c++) {
+            free(chip[c]);
+        }
+        free(cg);
         return 0;
     }
     for (i = 0; i < CG_SIZE / 4; i++) {
@@ -267,13 +280,13 @@ static int build(u8* bios, u8** cg_out, u32** user5_out) {
     }
 
     /* graphics SIMMs 3-6: chip pairs interleaved by halfword */
-    user5 = calloc(CPS3_USER5_SIZE / 4, 4);
-    if (user5 == NULL) {
+    words = malloc(CHIP * 2);
+    if (words == NULL) {
         free(cg);
         snprintf(cps3_romset_error, sizeof(cps3_romset_error), "Out of memory.");
         return 0;
     }
-    for (simm = 3, i = 0; simm <= 6; simm++) {
+    for (simm = 3; simm <= 6; simm++) {
         for (pair = 0; pair < 8; pair += 2) {
             u8* f0;
             u8* f1;
@@ -284,36 +297,38 @@ static int build(u8* bios, u8** cg_out, u32** user5_out) {
             f1 = f0 != NULL ? read_member(name, CHIP) : NULL;
             if (f1 == NULL) {
                 free(f0);
+                free(words);
                 free(cg);
-                free(user5);
                 return 0;
             }
             for (j = 0; j < CHIP; j += 2) {
-                user5[i++] = (u32)f0[j] << 8 | (u32)f0[j + 1] << 24 | f1[j] | (u32)f1[j + 1] << 16;
+                words[j / 2] = (u32)f0[j] << 8 | (u32)f0[j + 1] << 24 | f1[j] | (u32)f1[j + 1] << 16;
             }
             free(f0);
             free(f1);
+            if (!put(ctx, words, CHIP / 2)) {
+                free(words);
+                free(cg);
+                return 0;
+            }
         }
     }
+    free(words);
     *cg_out = cg;
-    *user5_out = user5;
     return 1;
 }
 
-s32 cps3_load_romset(const char* zip_path) {
-    static u8 bios[CPS3_BIOS_SIZE];
+/* opens the set: the zip, and for a split set its parent next to it */
+static int open_set(const char* zip_path) {
     char parent[512];
     const char* slash;
-    u8* cg = NULL;
-    u32* user5 = NULL;
-    int ok;
     cps3_romset_error[0] = '\0';
+    progress_done = 0;
     if (!zip_open(&zips[0], zip_path)) {
         zip_close(&zips[0]);
         snprintf(cps3_romset_error, sizeof(cps3_romset_error), "Could not read %s as a zip.", zip_path);
-        return -1;
+        return 0;
     }
-    /* a split set keeps the files it shares with the parent in the parent's zip, next to it */
     slash = strrchr(zip_path, '/');
     if (strrchr(zip_path, '\\') > slash) {
         slash = strrchr(zip_path, '\\');
@@ -324,11 +339,109 @@ s32 cps3_load_romset(const char* zip_path) {
     } else if (!zip_open(&zips[1], parent)) {
         zip_close(&zips[1]);
     }
-    ok = build(bios, &cg, &user5);
+    return 1;
+}
+
+static void close_set(void) {
     zip_close(&zips[0]);
     zip_close(&zips[1]);
+    progress_fn = NULL;
+}
+
+static int put_memory(void* ctx, const u32* words, u32 count) {
+    u32** at = ctx;
+    memcpy(*at, words, count * 4);
+    *at += count;
+    return 1;
+}
+
+s32 cps3_load_romset(const char* zip_path) {
+    static u8 bios[CPS3_BIOS_SIZE];
+    u8* cg = NULL;
+    u32* user5;
+    u32* at;
+    int ok;
+    if (!open_set(zip_path)) {
+        return -1;
+    }
+    user5 = calloc(CPS3_USER5_SIZE / 4, 4);
+    if (user5 == NULL) {
+        close_set();
+        snprintf(cps3_romset_error, sizeof(cps3_romset_error), "Out of memory.");
+        return -1;
+    }
+    at = user5;
+    ok = build(bios, &cg, put_memory, &at);
+    close_set();
     if (!ok) {
+        free(user5);
         return -1;
     }
     return cps3_load_rom_data(bios, cg, CG_SIZE, user5);
+}
+
+static int put_file(void* ctx, const u32* words, u32 count) {
+    if (fwrite(words, 4, count, (FILE*)ctx) != count) {
+        snprintf(cps3_romset_error, sizeof(cps3_romset_error), "Could not write the graphics ROM.\nThe SD card needs "
+                 "about 72 MB free.");
+        return 0;
+    }
+    return 1;
+}
+
+static int write_file(const char* path, const void* data, u32 size) {
+    FILE* f = fopen(path, "wb");
+    int ok = f != NULL && fwrite(data, 1, size, f) == size;
+    if (f != NULL && fclose(f) != 0) {
+        ok = 0;
+    }
+    if (!ok) {
+        snprintf(cps3_romset_error, sizeof(cps3_romset_error), "Could not write %.400s.\nThe SD card needs about 72 MB "
+                 "free.", path);
+    }
+    return ok;
+}
+
+s32 cps3_unpack_romset(const char* zip_path, const char* dir, void (*progress)(u32 done, u32 total)) {
+    static const char* const names[3] = { "user5.bin", "cg.bin", "bios.bin" };    /* bios.bin last */
+    static u8 bios[CPS3_BIOS_SIZE];
+    char tmp[3][512], final[512];
+    u8* cg = NULL;
+    FILE* f;
+    int ok, i;
+    if (!open_set(zip_path)) {
+        return -1;
+    }
+    progress_fn = progress;
+    for (i = 0; i < 3; i++) {
+        snprintf(tmp[i], sizeof(tmp[i]), "%s/%s.tmp", dir, names[i]);
+    }
+    f = fopen(tmp[0], "wb");
+    if (f == NULL) {
+        close_set();
+        snprintf(cps3_romset_error, sizeof(cps3_romset_error), "Could not write to %.400s.", dir);
+        return -1;
+    }
+    ok = build(bios, &cg, put_file, f);
+    if (fclose(f) != 0) {
+        ok = 0;
+    }
+    close_set();
+    ok = ok && write_file(tmp[1], cg, CG_SIZE) && write_file(tmp[2], bios, CPS3_BIOS_SIZE);
+    free(cg);
+    /* the files appear only once all three are written, so an interrupted unpack starts again */
+    for (i = 0; i < 3; i++) {
+        snprintf(final, sizeof(final), "%s/%s", dir, names[i]);
+        if (ok) {
+            remove(final);
+            if (rename(tmp[i], final) != 0) {
+                snprintf(cps3_romset_error, sizeof(cps3_romset_error), "Could not write %.400s.", final);
+                ok = 0;
+            }
+        }
+        if (!ok) {
+            remove(tmp[i]);
+        }
+    }
+    return ok ? 0 : -1;
 }

@@ -33,7 +33,6 @@ punches, A B RT kicks, Start, and Back for a coin.
 
 In the operator menu (F2), CONFIGURATION has the game and coin settings, including free play.
 
-Other ways to start it: sf3.exe <path to sfiii3nr1.zip>, or sf3.exe <folder> with either sfiii3nr1.zip or the
-files tools/prepare_rom.py makes (bios.bin, cg.bin, user5.bin; the 3DS version uses these).
+You can also start it as sf3.exe <path to sfiii3nr1.zip>.
 
 Street Fighter and Capcom are trademarks of Capcom. This project is not affiliated with or endorsed by Capcom.

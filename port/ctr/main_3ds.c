@@ -1,7 +1,8 @@
 /*
  * main_3ds.c  The 3DS front end (libctru, citro3d)
  *
- * The ROM files go in sdmc:/sf3/rom-data (made by port/tools/prepare_rom.py); the EEPROM is saved there too.
+ * The ROM files are in sdmc:/sf3/rom-data, unpacked there from sdmc:/sf3/sfiii3nr1.zip the first time the game
+ * runs (cps3_romset.c). The EEPROM is saved there too.
  * The 64 MB graphics ROM does not fit in an Old 3DS's memory, so it is streamed from the SD card through a
  * page cache, with a thread reading ahead (ctr_prefetch.c).
  *
@@ -16,6 +17,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include <3ds.h>
 
@@ -27,8 +29,10 @@
 #include "ctr_sound.h"
 #include "ctr_bottom.h"
 #include "ctr_controls.h"
+#include "cps3_romset.h"
 
 #define ROM_DIR         "sdmc:/sf3/rom-data"
+#define ROM_SET         "sfiii3nr1.zip"
 #define USER5_PAGES     4096        /* graphics ROM cache in 16 KB pages: as many as memory allows */
 #define USER5_RESERVE   (4u << 20)  /* memory left free for later allocations (task stacks) */
 
@@ -133,6 +137,61 @@ static void bottom_help(void) {
     }
 }
 
+static int is_file(const char* path) {
+    FILE* f = fopen(path, "rb");
+    if (f != NULL) {
+        fclose(f);
+    }
+    return f != NULL;
+}
+
+static int rom_files_present(void) {
+    return is_file(ROM_DIR "/bios.bin") && is_file(ROM_DIR "/cg.bin") && is_file(ROM_DIR "/user5.bin");
+}
+
+static void unpack_progress(u32 done, u32 total) {
+    const u32 width = 30;
+    u32 i, n = done * width / total;
+    printf("\x1b[16;2H[");
+    for (i = 0; i < width; i++) {
+        putchar(i < n ? '#' : '-');
+    }
+    printf("] %3lu%%", (unsigned long)(done * 100 / total));
+    gfxFlushBuffers();
+    gspWaitForVBlank();
+}
+
+/* the first run: unpacks the ROM set zip into the files the game reads. 0 on failure, after saying why */
+static int unpack_rom_set(void) {
+    static const char* const places[2] = { "sdmc:/sf3/" ROM_SET, ROM_DIR "/" ROM_SET };
+    const char* zip = NULL;
+    char msg[700];
+    int i;
+    for (i = 0; i < 2 && zip == NULL; i++) {
+        zip = is_file(places[i]) ? places[i] : NULL;
+    }
+    if (zip == NULL) {
+        return fail("The ROM set was not found.\n\n"
+                    "Put " ROM_SET " (MAME, non-merged)\nin sdmc:/sf3/\n\nSee the README.");
+    }
+    mkdir(ROM_DIR, 0777);
+    consoleClear();
+    printf("\n Street Fighter III 3rd Strike\n\n"
+           "\x1b[33m ONE-TIME ROM UNPACK\x1b[0m\n\n"
+           " Unpacking " ROM_SET " into\n " ROM_DIR "\n\n"
+           " This happens only once and takes\n about a minute.\n\n"
+           " Please don't turn off the 3DS or\n take out the SD card.\n");
+    unpack_progress(0, 1);
+    if (cps3_unpack_romset(zip, ROM_DIR, unpack_progress) != 0) {
+        snprintf(msg, sizeof(msg), "\n\nThe ROM unpack failed:\n%s", cps3_romset_error);
+        return fail(msg);
+    }
+    printf("\x1b[19;2HDone. You can delete %s\n from the SD card now (70 MB).", zip + 5);
+    wait_key(240);
+    consoleClear();
+    return 1;
+}
+
 int main(int argc, char** argv) {
     char path[256];
     bool n3ds = false;
@@ -148,9 +207,12 @@ int main(int argc, char** argv) {
         osSetSpeedupEnable(true);
     }
 
+    if (!rom_files_present() && !unpack_rom_set()) {
+        return 0;
+    }
     cps3_user5_stream(USER5_PAGES, USER5_RESERVE);
     if (cps3_load_rom(ROM_DIR) != 0) {
-        return fail("The ROM files were not found in\n" ROM_DIR "\n\nSee the README.");
+        return fail("The ROM files in\n" ROM_DIR "\ncould not be read.\n\nDelete them to unpack " ROM_SET "\nagain.");
     }
     ctr_controls_load();
     if (!ctr_video_init()) {

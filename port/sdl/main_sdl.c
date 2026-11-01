@@ -4,8 +4,8 @@
  *     sf3 [sfiii3nr1.zip | folder]
  *
  * The ROM set is MAME's sfiii3nr1.zip, read as it is (cps3_romset.c). With no argument it is looked for in the
- * roms folder next to sf3.exe, then in rom-data folders (the files port/tools/prepare_rom.py makes, which the
- * 3DS uses). The settings EEPROM is saved next to the ROM set.
+ * roms folder next to sf3.exe, then in rom-data folders (bios.bin, cg.bin and user5.bin, as the 3DS unpacks
+ * them). The settings EEPROM is saved next to the ROM set.
  *
  * Runs the board at its 59.59 Hz frame rate with the software renderer. Alt+Enter or F11 toggles full screen,
  * F12 saves frame.bmp, Escape quits.

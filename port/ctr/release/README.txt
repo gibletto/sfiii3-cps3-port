@@ -8,39 +8,26 @@ https://github.com/gibletto/sfiii3-cps3-port
 
 What you need
 -------------
-- A 3DS with custom firmware (Luma3DS) and the Homebrew Launcher.
+- A 3DS with custom firmware (Luma3DS).
 - The arcade ROM set as a MAME zip, sfiii3nr1.zip (non-merged).
-- Python 3 on a PC, to convert the ROM set.
+- About 140 MB free on the SD card (70 MB once the zip is deleted).
 
-1. Convert the ROM set (on the PC)
-----------------------------------
-    python tools/prepare_rom.py <path to sfiii3nr1.zip> rom-data
-
-This writes bios.bin, cg.bin and user5.bin into rom-data.
-
-2. Copy to the SD card
+1. Copy to the SD card
 ----------------------
-Copy the contents of the sd folder to the root of the SD card, then put the three files from step 1 in
-sdmc:/sf3/rom-data/:
+Copy the contents of the sd folder to the root of the SD card, and put sfiii3nr1.zip in sdmc:/sf3/ as it is.
 
-    sdmc:/sf3/rom-data/bios.bin
-    sdmc:/sf3/rom-data/cg.bin
-    sdmc:/sf3/rom-data/user5.bin
-
-Then either install the CIA or use the 3dsx:
-
-- sf3.cia (recommended): copy it to the SD card and install it with FBI. The game gets its own icon on the
-  HOME Menu. On an original 3DS it asks for the larger 80 MB memory mode, so it keeps more of the graphics in
-  memory and reads the SD card less.
-- sdmc:/3ds/sf3.3dsx: start it from the Homebrew Launcher. Nothing to install.
+Then either:
+- install sf3.cia with FBI (recommended): the game gets its own HOME Menu icon, and on an original 3DS it uses
+  the larger 80 MB memory mode, so it reads the SD card less; or
+- use sdmc:/3ds/sf3.3dsx from the Homebrew Launcher.
 
 Sound needs the 3DS's DSP firmware, which can't be included. Run the DSP1 homebrew once: it saves it as
 sdmc:/3ds/dspfirm.cdc. Without it the game runs silent.
 
-3. Play
+2. Play
 -------
-Start "SF III 3rd Strike" from the HOME Menu (CIA) or the Homebrew Launcher (3dsx). It takes a few seconds to
-load.
+Start "SF III 3rd Strike". The first time, it unpacks sfiii3nr1.zip into sdmc:/sf3/rom-data ("One-time ROM
+unpack", about a minute). After that you can delete the zip.
 
     D-pad / Circle Pad   move
     Y  X  L              light / medium / heavy punch
@@ -58,8 +45,8 @@ button for each attack in turn (SELECT for none, START to cancel). The buttons a
 sdmc:/sf3/controls.ini, which you can also edit on a PC: each line is a button and what it does, and a button
 can do several things at once, for example "R = HP HK".
 
-Hold SELECT and press START for the arcade's operator menu. CONFIGURATION has the game and coin settings,
-including free play. Settings and high scores are saved in sdmc:/sf3/rom-data/eeprom.bin.
+In the operator menu, CONFIGURATION has the game and coin settings, including free play. Settings and high
+scores are saved in sdmc:/sf3/rom-data/eeprom.bin.
 
 The bottom screen shows your fighter's move list once you have chosen them (move lists from Supercombo.gg).
 With the 3D slider up, the attract screens have depth.
