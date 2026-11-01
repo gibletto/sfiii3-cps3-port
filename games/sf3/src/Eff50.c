@@ -1,0 +1,138 @@
+/*
+ * EFF50.C  Effect 50: super art selection plate part
+ *
+ * Effect 50 is created by effect_50_init from sel_pl as part of the super art selection display.
+ * effect_50_move appears when the art selection opens, animates in step with the plate held in
+ * Synchro_Address, and when Moving_Plate selects its plate steps to the next animation and shifts
+ * its offset; it follows Plate_X / Plate_Y for the player and hides and releases itself when
+ * Sel_Arts_Complete is set.
+ */
+
+#include "structs.h"
+#include "work.h"
+#include "romdata.h"
+#include "extern.h"
+#include "charmove_2.h"
+#include "aboutspr.h"
+#include "EFFECT.h"
+#include "effect_2.h"
+#include "Eff50.h"
+
+/* routine_no[0] */
+#define R0_WAIT         0       /* wait for the art select to open */
+#define R0_MOVE         1       /* animate with the plates */
+#define R0_SHIFT        2       /* shifted while its plate moves */
+#define R0_HIDE         3       /* count down, then hide */
+#define R0_KILL         4       /* (default) put the work back */
+
+
+void effect_50_move(WORK_Other* ewk) {
+    WORK_Other* pwk;
+    if (Sel_Arts_Complete[ewk->master_id] < 0) {
+        ewk->wu.routine_no[0] = R0_HIDE;
+        ewk->wu.dir_timer = 1;
+        return;
+    }
+    pwk = (WORK_Other*)Synchro_Address[ewk->master_id][(ewk->wu.direction - 1) ^ 1];
+    switch (ewk->wu.routine_no[0]) {
+    case R0_WAIT:
+        if (Select_Arts[ewk->master_id] == 0) {
+            ewk->wu.routine_no[0]++;
+            ewk->wu.disp_flag = 1;
+        }
+        break;
+    case R0_MOVE:
+        if (Sel_Arts_Complete[ewk->master_id]) {
+            ewk->wu.routine_no[0] = R0_HIDE;
+            ewk->wu.dir_timer = 5;
+        } else if (Moving_Plate[ewk->master_id] == ewk->wu.direction && ewk->wu.dm_vital == 0) {
+            ewk->wu.routine_no[0]++;
+            ewk->wu.char_index++;
+            ewk->wu.dmcal_m += 4;
+            ewk->wu.dmcal_d--;
+            set_char_move_init(&ewk->wu, 0, ewk->wu.char_index);
+        }
+        if (ewk->wu.dm_vital == 0) {
+            char_move(&ewk->wu);
+        }
+        break;
+    case R0_SHIFT:
+        if (ewk->wu.cg_type != 0 && !Moving_Plate[ewk->master_id]) {
+            ewk->wu.routine_no[0] = R0_MOVE;
+            ewk->wu.char_index--;
+            set_char_move_init(&ewk->wu, 0, ewk->wu.char_index);
+            ewk->wu.cg_ix = pwk->wu.cg_ix - ewk->wu.cgd_type;
+            char_move_z(&ewk->wu);
+            ewk->wu.cg_ctr = pwk->wu.cg_ctr;
+            ewk->wu.dmcal_m -= 4;
+            ewk->wu.dmcal_d++;
+            if (ewk->wu.direction != 1) {
+                break;
+            }
+        }
+        char_move(&ewk->wu);
+        break;
+    case R0_HIDE:
+        if (--ewk->wu.dir_timer == 0) {
+            ewk->wu.disp_flag = 0;
+            ewk->wu.routine_no[0]++;
+            return;
+        }
+        break;
+    default:
+        all_cgps_put_back(&ewk->wu);
+        push_effect_work(&ewk->wu);
+        return;
+    }
+    ewk->wu.xyz[0].disp.pos = Plate_X[ewk->master_id][0] + ewk->wu.dmcal_m;
+    ewk->wu.xyz[1].disp.pos = Plate_Y[ewk->master_id][0] + ewk->wu.dmcal_d;
+    ewk->wu.position_x = ewk->wu.xyz[0].disp.pos & 0x3FF;
+    ewk->wu.position_y = ewk->wu.xyz[1].disp.pos & 0x3FF;
+    sort_push_request4(&ewk->wu);
+}
+
+
+/* provisional name */
+void effect_50_char_move(WORK_Other* ewk) {
+    if (ewk->wu.dm_vital == 0) {
+        char_move(&ewk->wu);
+    }
+}
+
+
+s32 effect_50_init(s16 PL_id, s16 Direction, s16 dm_vital) {
+    WORK_Other* ewk;
+    s16 ix;
+    if ((ix = pull_effect_work(4)) == -1) {
+        return -1;
+    }
+    ewk = (WORK_Other*)frw[ix];
+    ewk->wu.be_flag = 1;
+    ewk->wu.id = 50;
+    ewk->wu.work_id = 16;
+    ewk->wu.cgromtype = 1;
+    ewk->wu.my_col_mode = 0x4200;
+    ewk->wu.my_col_code = 0x2040;
+    ewk->wu.my_family = 3;
+    ewk->master_id = PL_id;
+    ewk->wu.char_table[0] = sel_pl_char_table;
+    ewk->wu.dm_vital = dm_vital;
+    ewk->wu.direction = Direction;
+    if (dm_vital == 0) {
+        Synchro_Address[ewk->master_id][ewk->wu.direction - 1] = (u32*)ewk;
+    }
+    ewk->wu.xyz[0].disp.pos = Plate_Pos_Data_79[Play_Type][ewk->master_id][0][SEL_POS_X];
+    ewk->wu.xyz[1].disp.pos = Plate_Pos_Data_79[Play_Type][ewk->master_id][0][SEL_POS_Y];
+    if (dm_vital == 1) {
+        ewk->wu.char_index = 31;
+        ewk->wu.dir_step = Direction - 1;
+    } else {
+        ewk->wu.char_index = ((Direction - 1) * 2) + 27;
+        ewk->wu.dir_step = 0;
+    }
+    ewk->wu.dmcal_m = EFF50_Correct_Data[Direction - 1][dm_vital][SEL_POS_X];
+    ewk->wu.dmcal_d = EFF50_Correct_Data[Direction - 1][dm_vital][SEL_POS_Y];
+    ewk->wu.position_z = 30;
+    set_char_move_init2(&ewk->wu, 0, ewk->wu.char_index, ewk->wu.dir_step + 1, 0);
+    return 0;
+}

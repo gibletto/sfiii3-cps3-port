@@ -1,0 +1,2160 @@
+/*
+ * BG000.C  Stage background setup and stages BG000-BG030
+ *
+ * Common stage background services plus the first stage routines.
+ * bg_initialize loads a stage: picks bg_index from stage and area, transfers its
+ * scroll graphics and palette and initialises all seven layer works; bg_etc_write does the
+ * same for the special screens, and akebono_initialize prepares the finish-screen BG3 pages.
+ * reset_all_char_display_with_backup returns every layer to its work position;
+ * bg_rect_attr_preset/add and oh_opening_demo patch map cell attributes and scroll_cell_write
+ * writes one 16x16 cell. bg_base_move_common and bg_move_common are the standard main-layer
+ * and follower-layer moves; capcom_logo_anim runs a timed count, music change
+ * and fade at the end of a round. BG000 and BG010 run their stages' layers.
+ */
+
+#include "structs.h"
+#include "work.h"
+#include "romdata.h"
+#include "extern.h"
+#include "Com_Pl.h"
+#include "SYS_sub.h"
+#include "fifo.h"
+#include "sys_test.h"
+#include "sys_test_2.h"
+#include "sys_test_2b.h"
+#include "sys_test_2c.h"
+#include "sys_test_3.h"
+#include "sys_test_4.h"
+#include "sys_test_5.h"
+#include "ta_sub2.h"
+#include "tate00.h"
+#include "ta_sub.h"
+#include "sys_config_2.h"
+#include "sys_config_3.h"
+#include "bg_sub_2.h"
+#include "bg_sub_3.h"
+#include "bg_sub_4.h"
+#include "bg_sub_5.h"
+#include "bg_sub.h"
+#include "bg040.h"
+#include "end_sub.h"
+#include "end_sub_2.h"
+#include "end_sub_3.h"
+#include "end_sub_4.h"
+#include "end_sub_5.h"
+#include "end_sub_6.h"
+#include "end_sub_7.h"
+#include "color3rd.h"
+#include "end_sub_8.h"
+#include "EFF61.h"
+#include "EFF78.h"
+#include "SE.h"
+#include "se_2.h"
+#include "se_3.h"
+#include "bg120.h"
+#include "eff05.h"
+#include "eff06.h"
+#include "EFF07.h"
+#include "EFF11.h"
+#include "eff14.h"
+#include "EFF44.h"
+#include "aboutspr.h"
+#include "bg000.h"
+#include "fighter.h"
+
+/* bgw r_no_0 of a layer that follows the camera */
+#define SYNC_INIT       0       /* set up the layer */
+#define SYNC_MOVE       1       /* follow the camera (bg_x_move_check, bg_y_move_check) */
+
+/* bg_w.bgw[1].r_no_1 in capcom_logo_anim */
+#define LOGO_INIT       0       /* set up, start the logo music */
+#define LOGO_COLOR      1       /* colour steps until they finish */
+#define LOGO_FADE       2       /* request the fade */
+#define LOGO_FADE_WAIT  3       /* colour steps until the fade is done */
+#define LOGO_OUT        4       /* the last colour steps, then report the end */
+#define LOGO_END        5       /* finished */
+
+/* bg_w.bgw[1].r_no_2 in capcom_logo_color_step */
+#define LSTEP_FIRST     0       /* colour steps up to 90 */
+#define LSTEP_LAST      1       /* colour steps up to 95, then layer 1 off */
+#define LSTEP_DONE      2       /* finished */
+
+/* bgw r_no_0 of a layer with an entrance demo: its bg*_jmp routine */
+#define R0_INIT         0       /* set up the layer */
+#define R0_DEMO         1       /* the entrance demo */
+#define R0_MOVE         2       /* follow the fight */
+
+
+
+s32 chr_dma_request();
+s32 simmram_block_alloc_10(s32 blocks, s32 kind);
+u32 simmram_big_page_alloc_40(s32 kind);
+u32 simmram_slot_addr(s16 no);
+u32 simmram_slot_to_offset(s16 handle);
+s32 sprite_list_setup();
+void scrn_attr_set(s16 n, u16 attr, u16 bits);
+void scrn_map_set_now(u16 n, u32 p);
+void scrn_map_set(u16 n, u32 p);
+#define SUZI_W  ((SUZI_CALC*)suzi_calc_w)
+#define SUZI_W0 (&suzi_calc_w[0])
+/* suzi_line_buf: a line's x as a 16.16 s32 the board keeps as two u16s, whole part first, and adds to as an
+   s32. A little-endian host keeps the s32 as its own (the whole part in the second u16), so the adds carry
+   into it as on the board. */
+#ifdef HOST_LITTLE_ENDIAN
+#define SUZI_INT_IX     1
+#else
+#define SUZI_INT_IX     0
+#endif
+#define SUZI_INT(l)     (((u16*)(l))[SUZI_INT_IX])
+
+
+
+/*
+ * Stage background subroutines: scrolling, zoom, family set, cell writers
+ *
+ * Zoom: zoom_frame_judge, zoom_ud_check, zoom_x_width_check, bg_base_y_move_check. Line scroll:
+ * suzi_line_clear, suzi_offset_set, suzi_sync_pos_set.
+ */
+
+
+
+void bg_base_y_move_check(void) {
+    s32 pos_w;
+    s32 kake;
+    s16 hi_pos;
+    if (bg_stop) {
+        goto skip;
+    }
+    if (bg_app_stop) {
+        goto skip;
+    }
+    if (plw[0].wu.scr_mv_y > plw[1].wu.scr_mv_y) {
+        hi_pos = plw[0].wu.scr_mv_y;
+    } else {
+        hi_pos = plw[1].wu.scr_mv_y;
+    }
+    hi_pos -= 0x58;
+    if (hi_pos <= 0) {
+        bgw_ptr->xy[1].cal = bgw_ptr->wxy[1].cal = 0;
+    } else {
+        kake = 0x1C000;
+        pos_w = kake * hi_pos;
+        bgw_ptr->wxy[1].cal = bgw_ptr->xy[1].cal = 0;
+        bgw_ptr->xy[1].cal += pos_w;
+        bgw_ptr->wxy[1].cal += pos_w;
+        if (bgw_ptr->xy[1].disp.pos > bgw_ptr->y_limit2) {
+            bgw_ptr->xy[1].disp.pos = bgw_ptr->y_limit2;
+            bgw_ptr->xy[1].disp.low = 0;
+            bgw_ptr->wxy[1].disp.pos = bgw_ptr->y_limit2;
+            bgw_ptr->wxy[1].disp.low = 0;
+            bg_w.scr_stop &= 0x7FFF;
+        }
+    }
+skip:
+    bg_w.bg2_sp_y = bgw_ptr->xy[1].disp.pos - bgw_ptr->pos_y_work;
+}
+
+
+
+void bg_x_move_check(void) {
+    if (bg_w.chase_flag & 0xF) {
+        bgw_ptr->old_pos_x = bgw_ptr->chase_xy[0].disp.pos;
+    } else {
+        bgw_ptr->old_pos_x = bgw_ptr->wxy[0].disp.pos;
+    }
+    if (bg_w.chase_flag & 0xF) {
+        bgw_ptr->chase_xy[0].cal = bgw_ptr->speed_x * bg_w.bg2_sp_x2;
+        bgw_ptr->chase_xy[0].disp.pos += bgw_ptr->pos_x_work;
+    } else {
+        bgw_ptr->wxy[0].cal = bgw_ptr->xy[0].cal = bgw_ptr->speed_x * bg_w.bg2_sp_x2;
+        bgw_ptr->xy[0].disp.pos += bgw_ptr->pos_x_work;
+        bgw_ptr->wxy[0].disp.pos = bgw_ptr->xy[0].disp.pos;
+    }
+    if (!(bg_w.chase_flag & 0xF)) {
+        bgw_ptr->chase_xy[0].disp.pos = bgw_ptr->wxy[0].disp.pos;
+    }
+}
+
+
+
+void bg_y_move_check(void) {
+    if (bg_w.chase_flag & 0xF0) {
+        bgw_ptr->chase_xy[1].cal = bgw_ptr->speed_y * bg_w.bg2_sp_y;
+        if (bgw_ptr->y_limit2 < bgw_ptr->chase_xy[1].disp.pos) {
+            bgw_ptr->chase_xy[1].disp.pos = bgw_ptr->y_limit2;
+            bgw_ptr->chase_xy[1].disp.low = 0;
+        }
+        bgw_ptr->chase_xy[1].disp.pos += bgw_ptr->pos_y_work;
+    } else {
+        bgw_ptr->xy[1].cal = bgw_ptr->speed_y * bg_w.bg2_sp_y;
+        if (bgw_ptr->y_limit2 < bgw_ptr->xy[1].disp.pos) {
+            bgw_ptr->xy[1].disp.pos = bgw_ptr->y_limit2;
+            bgw_ptr->xy[1].disp.low = 0;
+        }
+        bgw_ptr->xy[1].disp.pos += bgw_ptr->pos_y_work;
+        bgw_ptr->wxy[1].cal = bgw_ptr->xy[1].cal;
+    }
+}
+
+
+
+/* provisional name */
+s32 zoom_frame_judge(void) {
+    PLW* p1;
+    PLW* p2;
+    s16 left;
+    s16 right;
+    s16 gap;
+    bg_w.frame_flag = 0;
+    if (bg_w.bgw[1].wxy[0].disp.pos <= bg_w.bgw[1].l_limit2 ||
+        bg_w.bgw[1].wxy[0].disp.pos >= bg_w.bgw[1].r_limit2) {
+        return 2;
+    } else {
+        p1 = &plw[0];
+        p2 = &plw[1];
+    }
+    if (p1->wu.scr_mv_x < p2->wu.scr_mv_x) {
+        left = p1->wu.scr_mv_x;
+        right = p2->wu.scr_mv_x;
+    } else {
+        left = p2->wu.scr_mv_x;
+        right = p1->wu.scr_mv_x;
+    }
+    gap = right - left;
+    if (gap > 368) {
+        return 2;
+    }
+    return 1;
+}
+
+
+
+void zoom_ud_check(void) {
+    s16 work;
+    s16 work2;
+    s16 pos_w;
+    s16 x;
+    if (bg_app) {
+        return;
+    }
+    if (bg_app_stop) {
+        return;
+    }
+    if (Bonus_Game_Flag) {
+        return;
+    }
+    work2 = zoom_request_flag & 0xFF;
+    bg_w.frame_deff = 64 - zoom_request_level;
+    work = 0xFF & (~zoom_req_flag_old & zoom_request_flag);
+    if (work && !bg_w.frame_flag) {
+        bg_w.frame_flag = 1;
+        bg_w.old_frame_flag = 1;
+        bg_w.center_y = 224 - scr_req_y;
+        x = scr_req_x;
+        if (x < bg_w.bgw[1].l_limit2) {
+            if (bg_w.bgw[1].zuubun != 0) {
+                bg_w.center_x = x + 512;
+                pos_w = bg_w.bgw[1].wxy[0].disp.pos + 512;
+            } else {
+                bg_w.center_x = x;
+                pos_w = bg_w.bgw[1].wxy[0].disp.pos;
+            }
+            pos_w -= bg_w.pos_offset;
+            bg_w.center_x -= pos_w;
+            if (Monitor_Flip) {
+                bg_w.center_x = bg_w.pos_offset * 2 - bg_w.center_x;
+            }
+            goto zoom_check;
+        }
+        if (bg_w.bgw[1].r_limit2 < x) {
+            if (bg_w.bgw[1].zuubun != 0) {
+                bg_w.center_x = x + 512;
+                pos_w = bg_w.bgw[1].wxy[0].disp.pos + 512;
+            } else {
+                bg_w.center_x = x;
+                pos_w = bg_w.bgw[1].wxy[0].disp.pos;
+            }
+            pos_w -= bg_w.pos_offset;
+            bg_w.center_x -= pos_w;
+            if (Monitor_Flip) {
+                bg_w.center_x = bg_w.pos_offset * 2 - bg_w.center_x;
+            }
+        } else {
+            bg_w.center_x = 192;
+            bg_w.center_y = 224;
+        }
+    }
+zoom_check:
+    if (work2) {
+        if (bg_w.bg_f_x > bg_w.frame_deff) {
+            Frame_Up(bg_w.center_x, bg_w.center_y, 1, 1);
+            bg_w.bg_f_x--;
+            bg_w.bg_f_y--;
+            return;
+        }
+        if (bg_w.bg_f_x < bg_w.frame_deff) {
+            Frame_Down(bg_w.center_x, bg_w.center_y, 1, 1);
+            bg_w.bg_f_x++;
+            bg_w.bg_f_y++;
+            if (bg_w.bg_f_x == 64) {
+                bg_w.frame_flag = 0;
+                Zoomf_Init();
+            }
+        }
+    } else if (bg_w.bg_f_x < 64) {
+        Frame_Down(bg_w.center_x, bg_w.center_y, 1, 1);
+        bg_w.bg_f_x++;
+        bg_w.bg_f_y++;
+        if (bg_w.bg_f_x == 64) {
+            bg_w.frame_flag = 0;
+            Zoomf_Init();
+        }
+    }
+}
+
+
+
+/* provisional name */
+/* An earlier frame judgement on the two players' distance alone. */
+s32 zoom_frame_judge_dist(void) {
+    s16 right;
+    s32 left;
+    bg_w.frame_flag = 0;
+    if (plw[0].wu.scr_mv_x < plw[1].wu.scr_mv_x) {
+        left = plw[0].wu.scr_mv_x;
+        right = plw[1].wu.scr_mv_x;
+    } else {
+        left = plw[1].wu.scr_mv_x;
+        right = plw[0].wu.scr_mv_x;
+    }
+    right -= left;
+    if (right > 304) {
+        return 2;
+    }
+    if (right < 272) {
+        return 1;
+    }
+    return 0;
+}
+
+
+
+/* provisional name */
+void zoom_x_width_check(void) {
+    s32 f;
+    if (Game_setting.Screen_Mode) {
+        return;
+    }
+    if (bg_stop) {
+        return;
+    }
+    if (bg_app_stop) {
+        return;
+    }
+    bg_w.frame_flag = zoom_frame_judge();
+    f = bg_w.bg_f_x;
+    switch (bg_w.frame_flag) {
+    case 1:
+        if (f < 9) {
+            bg_w.bg_f_x++;
+            if (bg_w.old_frame_flag == 1) {
+                Frame_Up(192, 224, 1, 0);
+            }
+        }
+        break;
+    case 2:
+        if (f > 0) {
+            bg_w.bg_f_x--;
+            if (bg_w.old_frame_flag == 2) {
+                Frame_Down(192, 224, 1, 0);
+            }
+        }
+        break;
+    case 3:
+        if (f != 9) {
+            Zoomf_Init_X();
+        }
+        break;
+    }
+}
+
+/* provisional name */
+void zoom_y_width_check(void) {
+    s32 f;
+    if (Game_setting.Screen_Mode) {
+        return;
+    }
+    bg_w.old_bg_f_y = bg_w.bg_f_y;
+    bg_w.frame_flag = zoom_frame_judge();
+    f = bg_w.bg_f_y;
+    switch (bg_w.frame_flag) {
+    case 1:
+        if (f < 9) {
+            bg_w.bg_f_y++;
+            if (bg_w.old_frame_flag == 1) {
+                Frame_Up(192, 224, 0, 1);
+            }
+        }
+        break;
+    case 2:
+        if (f > 0) {
+            bg_w.bg_f_y--;
+            if (bg_w.old_frame_flag == 2) {
+                Frame_Down(192, 224, 0, 1);
+            }
+        }
+        break;
+    case 3:
+        if (f != 9) {
+            Zoomf_Init_Y();
+        }
+        break;
+    }
+}
+
+
+
+/* provisional name */
+void suzi_line_clear(s16 bg_num) {
+    u16* dst;
+    s16 i;
+    dst = bg_w.bgw[bg_num].suzi_adrs;
+    for (i = 0; i < 0x400; i++) {
+        *dst++ = 0x200;
+        *dst++ = 0;
+    }
+    dst = suzi_line_buf;
+    for (i = 0; i < 0x400; i++) {
+#ifdef HOST_LITTLE_ENDIAN
+        *dst++ = 0;
+        *dst++ = 0x200;
+#else
+        *dst++ = 0x200;
+        *dst++ = 0;
+#endif
+    }
+}
+
+/* provisional name */
+void suzi_line_calc(s16 bg_num) {
+    s32* line;
+    u16* dst;
+    u16 top;
+    s16 pos;
+    s16 dist;
+    s16 i;
+    if (bg_stop) {
+        return;
+    }
+    if (bg_app_stop) {
+        return;
+    }
+    if (bg_w.chase_flag & 0xF) {
+        pos = bg_w.bgw[bg_num].chase_xy[0].disp.pos;
+    } else {
+        pos = bg_w.bgw[bg_num].wxy[0].disp.pos;
+    }
+    if (bg_w.bgw[bg_num].old_pos_x == pos) {
+        return;
+    }
+    dist = pos;
+    dist -= bg_w.bgw[bg_num].old_pos_x;
+    if (dist < 0) {
+        dist = -dist;
+        suzi_calc_w->step = bg_w.bgw[bg_num].zuubun * dist;
+        dst = bg_w.bgw[bg_num].start_suzi;
+        SUZI_W0->ofs = SUZI_W0->step * bg_w.bgw[bg_num].u_line;
+        line = (s32*)suzi_line_buf;
+        for (i = 0; i < bg_w.bgw[bg_num].u_line; i++) {
+            *line += suzi_calc_w->ofs;
+            SUZI_W->ofs -= SUZI_W->step;
+            *dst = SUZI_INT(line);
+            line++;
+            dst = dst + 2;
+        }
+        suzi_calc_w->ofs = 0;
+        for (i = 0; i < bg_w.bgw[bg_num].d_line; i++) {
+            *line -= suzi_calc_w->ofs;
+            SUZI_W->ofs += SUZI_W->step;
+            *dst = SUZI_INT(line);
+            line++;
+            dst = dst + 2;
+        }
+    } else {
+        suzi_calc_w->step = bg_w.bgw[bg_num].zuubun * dist;
+        dst = bg_w.bgw[bg_num].start_suzi;
+        SUZI_W0->ofs = SUZI_W0->step * bg_w.bgw[bg_num].u_line;
+        line = (s32*)suzi_line_buf;
+        for (i = 0; i < bg_w.bgw[bg_num].u_line; i++) {
+            *line -= suzi_calc_w->ofs;
+            SUZI_W->ofs -= SUZI_W->step;
+            *dst = SUZI_INT(line);
+            line++;
+            dst = dst + 2;
+        }
+        suzi_calc_w->ofs = 0;
+        for (i = 0; i < bg_w.bgw[bg_num].d_line; i++) {
+            *line += suzi_calc_w->ofs;
+            SUZI_W->ofs += SUZI_W->step;
+            *dst = SUZI_INT(line);
+            line++;
+            dst = dst + 2;
+        }
+    }
+    top = suzi_line_buf[SUZI_INT_IX];
+    dst = bg_w.bgw[bg_num].suzi_adrs + 1024;
+    for (i = 0; i < bg_w.bgw[bg_num].no_suzi_line - 512; i++) {
+        *dst++ = top;
+        dst++;
+    }
+}
+
+
+
+/* provisional name */
+void suzi_line_calc_fill(s16 bg_num) {
+    s32* line;
+    u16* dst;
+    u16 top;
+    s16 pos;
+    s16 dist;
+    s16 count;
+    s16 i;
+    if (bg_stop) {
+        return;
+    }
+    if (bg_app_stop) {
+        return;
+    }
+    if (bg_w.chase_flag & 0xF) {
+        pos = bg_w.bgw[bg_num].chase_xy[0].disp.pos;
+    } else {
+        pos = bg_w.bgw[bg_num].wxy[0].disp.pos;
+    }
+    if (bg_w.bgw[bg_num].old_pos_x == pos) {
+        return;
+    }
+    dist = pos;
+    dist -= bg_w.bgw[bg_num].old_pos_x;
+    if (dist < 0) {
+        dist = -dist;
+        suzi_calc_w->step = bg_w.bgw[bg_num].zuubun * dist;
+        dst = bg_w.bgw[bg_num].start_suzi;
+        SUZI_W0->ofs = SUZI_W0->step * bg_w.bgw[bg_num].u_line;
+        line = (s32*)suzi_line_buf;
+        for (i = 0; i < bg_w.bgw[bg_num].u_line; i++) {
+            *line += suzi_calc_w->ofs;
+            SUZI_W->ofs -= SUZI_W->step;
+            *dst = SUZI_INT(line);
+            line++;
+            dst = dst + 2;
+        }
+        suzi_calc_w->ofs = 0;
+        for (i = 0; i < bg_w.bgw[bg_num].d_line; i++) {
+            *line -= suzi_calc_w->ofs;
+            SUZI_W->ofs += SUZI_W->step;
+            *dst = SUZI_INT(line);
+            line++;
+            dst = dst + 2;
+        }
+        line--;
+        count = 41 - bg_w.bgw[bg_num].d_line;
+        i = 0;
+        if (count <= 0) {
+            goto fill_top;
+        }
+        do {
+            *dst = SUZI_INT(line);
+            dst += 2;
+            i++;
+        } while (i < count);
+    } else {
+        suzi_calc_w->step = bg_w.bgw[bg_num].zuubun * dist;
+        dst = bg_w.bgw[bg_num].start_suzi;
+        SUZI_W0->ofs = SUZI_W0->step * bg_w.bgw[bg_num].u_line;
+        line = (s32*)suzi_line_buf;
+        for (i = 0; i < bg_w.bgw[bg_num].u_line; i++) {
+            *line -= suzi_calc_w->ofs;
+            SUZI_W->ofs -= SUZI_W->step;
+            *dst = SUZI_INT(line);
+            line++;
+            dst = dst + 2;
+        }
+        suzi_calc_w->ofs = 0;
+        for (i = 0; i < bg_w.bgw[bg_num].d_line; i++) {
+            *line += suzi_calc_w->ofs;
+            SUZI_W->ofs += SUZI_W->step;
+            *dst = SUZI_INT(line);
+            line++;
+            dst += 2;
+        }
+        line--;
+        count = 41 - bg_w.bgw[bg_num].d_line;
+        i = 0;
+        if (count <= 0) {
+            goto fill_top;
+        }
+        do {
+            *dst = SUZI_INT(line);
+            dst += 2;
+            i++;
+        } while (i < count);
+    }
+fill_top:
+    top = suzi_line_buf[SUZI_INT_IX];
+    dst = bg_w.bgw[bg_num].suzi_adrs + 1024;
+    for (i = 0; i < bg_w.bgw[bg_num].no_suzi_line - 512; i++) {
+        *dst++ = top;
+        dst++;
+    }
+}
+
+/* provisional name */
+void suzi_line_calc_flat(s16 bg_num) {
+    s32* line;
+    u16* dst;
+    u16 top;
+    s16 pos;
+    s16 dist;
+    s16 count;
+    s16 i;
+    if (bg_stop) {
+        return;
+    }
+    if (bg_app_stop) {
+        return;
+    }
+    if (bg_w.chase_flag & 0xF) {
+        pos = bg_w.bgw[bg_num].chase_xy[0].disp.pos;
+    } else {
+        pos = bg_w.bgw[bg_num].wxy[0].disp.pos;
+    }
+    if (bg_w.bgw[bg_num].old_pos_x == pos) {
+        return;
+    }
+    dist = pos;
+    dist -= bg_w.bgw[bg_num].old_pos_x;
+    if (dist < 0) {
+        dist = -dist;
+        suzi_calc_w->step = bg_w.bgw[bg_num].zuubun * dist;
+        dst = bg_w.bgw[bg_num].start_suzi;
+        SUZI_W0->ofs = SUZI_W0->step * bg_w.bgw[bg_num].u_line;
+        line = (s32*)suzi_line_buf;
+        for (i = 0; i < bg_w.bgw[bg_num].u_line; i++) {
+            *line += suzi_calc_w->ofs;
+            SUZI_W->ofs -= SUZI_W->step;
+            *dst = SUZI_INT(line);
+            line++;
+            dst += 2;
+        }
+        line--;
+        count = bg_w.bgw[bg_num].d_line - 1;
+        i = 0;
+        if (count <= 0) {
+            goto fill_top;
+        }
+        do {
+            *dst = SUZI_INT(line);
+            dst += 2;
+            i++;
+        } while (i < count);
+    } else {
+        suzi_calc_w->step = bg_w.bgw[bg_num].zuubun * dist;
+        dst = bg_w.bgw[bg_num].start_suzi;
+        SUZI_W0->ofs = SUZI_W0->step * bg_w.bgw[bg_num].u_line;
+        line = (s32*)suzi_line_buf;
+        for (i = 0; i < bg_w.bgw[bg_num].u_line; i++) {
+            *line -= suzi_calc_w->ofs;
+            SUZI_W->ofs -= SUZI_W->step;
+            *dst = SUZI_INT(line);
+            line++;
+            dst += 2;
+        }
+        line--;
+        count = bg_w.bgw[bg_num].d_line - 1;
+        i = 0;
+        if (count <= 0) {
+            goto fill_top;
+        }
+        do {
+            *dst = SUZI_INT(line);
+            dst += 2;
+            i++;
+        } while (i < count);
+    }
+fill_top:
+    top = suzi_line_buf[SUZI_INT_IX];
+    dst = bg_w.bgw[bg_num].suzi_adrs + 1024;
+    for (i = 0; i < bg_w.bgw[bg_num].no_suzi_line - 512; i++) {
+        *dst = top;
+        dst += 2;
+        continue;
+    }
+}
+
+
+
+/*
+ * Stage background subroutines: scrolling, zoom, family set, cell writers
+ *
+ * Routines: suzi_line_calc2.
+ */
+
+
+
+/* provisional name */
+void suzi_line_calc2(s16 bg_num) {
+    s32* line;
+    u16* dst;
+    u16* src;
+    s16 pos;
+    s16 dist;
+    s16 i;
+    if (bg_stop) {
+        return;
+    }
+    if (bg_app_stop) {
+        return;
+    }
+    if (bg_w.chase_flag & 0xF) {
+        pos = bg_w.bgw[bg_num].chase_xy[0].disp.pos;
+    } else {
+        pos = bg_w.bgw[bg_num].wxy[0].disp.pos;
+    }
+    if (bg_w.bgw[bg_num].old_pos_x == pos) {
+        return;
+    }
+    dist = pos;
+    dist -= bg_w.bgw[bg_num].old_pos_x;
+    if (dist < 0) {
+        dist = -dist;
+        suzi_calc_w->step = bg_w.bgw[bg_num].zuubun * dist;
+        dst = bg_w.bgw[bg_num].start_suzi;
+        SUZI_W0->ofs = SUZI_W0->step * bg_w.bgw[bg_num].u_line;
+        line = (s32*)suzi_line_buf;
+        for (i = 0; i < bg_w.bgw[bg_num].u_line; i++) {
+            *line += suzi_calc_w->ofs;
+            SUZI_W->ofs -= SUZI_W->step;
+            *dst = SUZI_INT(line);
+            line++;
+            dst = dst + 2;
+        }
+    } else {
+        suzi_calc_w->step = bg_w.bgw[bg_num].zuubun * dist;
+        dst = bg_w.bgw[bg_num].start_suzi;
+        SUZI_W0->ofs = SUZI_W0->step * bg_w.bgw[bg_num].u_line;
+        line = (s32*)suzi_line_buf;
+        for (i = 0; i < bg_w.bgw[bg_num].u_line; i++) {
+            *line -= suzi_calc_w->ofs;
+            SUZI_W->ofs -= SUZI_W->step;
+            *dst = SUZI_INT(line);
+            line++;
+            dst = dst + 2;
+        }
+    }
+    src = bg_w.bgw[bg_num].suzi_adrs;
+    dst = src;
+    src += 1024;
+    for (i = 0; i < 512; i++) {
+        *dst = *src++;
+        dst += 2;
+        src++;
+    }
+}
+
+
+/* provisional name */
+s32 bg_cell_offset(s16 x, s16 y) {
+    return ((((0x400 - (y & 0x300) - (y & 0xF0)) & 0x3F0) << 4) + ((x & 0x3F0) >> 2)) >> 1;
+}
+
+
+
+/*
+ * Stage background subroutines: scrolling, zoom, family set, cell writers
+ *
+ * Bg_Family_Set and its variants load scroll and family registers; bg_pos_hosei_* add the screen
+ * offset and quake.
+ */
+
+
+
+void suzi_offset_set(WORK* wk) {
+    if (wk->sync_suzi == 1) {
+        suzi_offset_set_sub(wk);
+    }
+}
+
+u32 suzi_offset_set_sub(WORK* wk) {
+    s16 work;
+    s16 work2;
+    s16 pos = wk->xyz[1].disp.pos;
+    u16* adrs;
+
+    work = pos & 0x300;
+    work = 0x300 - work;
+    work2 = pos & 0xFF;
+    work2 = 0x100 - work2;
+    work += work2;
+    work += work;
+    adrs = bg_w.bgw[wk->my_family - 1].suzi_adrs;
+    adrs += work;
+    wk->suzi_offset = adrs;
+    return 0;
+}
+
+
+
+void suzi_sync_pos_set(WORK_Other* ewk) {
+    s16 sub;
+    if (ewk->wu.sync_suzi) {
+        if (ewk->wu.sync_suzi == 2) {
+            suzi_offset_set_sub(&ewk->wu);
+        }
+        sub = *ewk->wu.suzi_offset;
+        sub -= 0x200;
+    } else {
+        sub = 0;
+    }
+    ewk->wu.position_x = (ewk->wu.xyz[0].disp.pos - sub) & 0x3FF;
+    ewk->wu.position_y = ewk->wu.xyz[1].disp.pos & 0x3FF;
+}
+
+
+
+void Bg_Family_Set(void) {
+    s32 i;
+    s32 x;
+    s32 y;
+    for (i = 0; i < bg_w.scno; i++) {
+        x = bg_w.bgw[i].position_x;
+        y = bg_w.bgw[i].position_y;
+        Scrn_Move_Set(i, x, y);
+        x = -x & 0x3FF;
+        y = (768 - (y & 0x3FF)) & 0x3FF;
+        Family_Set_W(i + 1, x, y);
+    }
+}
+
+
+
+#pragma inline(bg0101, bg0102, bg0001_ctrl, bg0000)
+
+void Bg_Family_Set_appoint(s32 num_of_bg) {
+    s32 x = bg_w.bgw[num_of_bg].position_x;
+    s32 y = bg_w.bgw[num_of_bg].position_y;
+    Scrn_Move_Set(num_of_bg, x, y);
+    x = -x & 0x3FF;
+    y = (768 - (y & 0x3FF)) & 0x3FF;
+    Family_Set_W(num_of_bg + 1, x, y);
+}
+
+
+
+void Bg_Family_Set_2(void) {
+    s32 i;
+    s32 fam_x, fam_y, x, y;
+    for (i = 0; i < bg_w.scno; i++) {
+        x = bg_w.bgw[i].position_x;
+        y = bg_w.bgw[i].position_y;
+        y += 8;
+        Scrn_Move_Set(i, x, y);
+        fam_x = -x & 0x3FF;
+        fam_y = (0x300 - (y & 0x3FF)) & 0x3FF;
+        Family_Set_W(i + 1, fam_x, fam_y);
+    }
+}
+
+
+
+void Bg_Family_Set_2_appoint(s32 num_of_bg) {
+    s32 x;
+    s32 y;
+    x = bg_w.bgw[num_of_bg].position_x;
+    y = bg_w.bgw[num_of_bg].position_y;
+    y += 8;
+    Scrn_Move_Set(num_of_bg, x, y);
+    x = -x & 0x3FF;
+    y = (768 - (y & 0x3FF)) & 0x3FF;
+    Family_Set_W(num_of_bg + 1, x, y);
+}
+
+
+
+/* provisional name */
+void ake_Family_Set(void) {
+    s32 pos_work_x = bg_w.bgw[3].position_x;
+    s32 pos_work_y = bg_w.bgw[3].position_y;
+    Scrn_Move_Set(3, pos_work_x, pos_work_y);
+    pos_work_x = -pos_work_x & 0x3FF;
+    pos_work_y = (768 - (pos_work_y & 0x3FF)) & 0x3FF;
+    Family_Set_W(4, pos_work_x, pos_work_y);
+}
+
+
+
+void ake_Family_Set2(void) {
+    s32 x = bg_w.bgw[3].position_x;
+    s32 y = bg_w.bgw[3].position_y;
+    Scrn_Move_Set(3, x, y);
+    x = 512 - bg_w.pos_offset;
+    y = 0;
+    x = -x & 0x3FF;
+    y = (768 - (y & 0x3FF)) & 0x3FF;
+    Family_Set_W(4, x, y);
+}
+
+
+
+void bg_pos_hosei_sub2(s32 bg_no) {
+    u16 pos;
+    u16 pos2;
+    pos2 = bg_w.bgw[bg_no].wxy[0].disp.pos;
+    pos = pos2 & 0x3FF;
+    pos -= bg_w.pos_offset;
+    pos &= 0x3FF;
+    pos += quake_x_tbl[bg_w.quake_x_index];
+    bg_w.bgw[bg_no].position_x = pos & 0x3FF;
+    pos2 -= bg_w.pos_offset;
+    pos2 += quake_x_tbl[bg_w.quake_x_index];
+    bg_w.bgw[bg_no].abs_x = pos2;
+    pos2 = bg_w.bgw[bg_no].xy[1].disp.pos;
+    pos = pos2 & 0x3FF;
+    pos += quake_y_tbl[bg_w.quake_y_index];
+    pos2 += quake_y_tbl[bg_w.quake_y_index];
+    bg_w.bgw[bg_no].position_y = pos & 0x3FF;
+    bg_w.bgw[bg_no].abs_y = pos2;
+}
+
+
+
+void bg_pos_hosei_sub3(s32 bg_no) {
+    u16 pos;
+    u16 pos2;
+    pos2 = bg_w.bgw[bg_no].wxy[0].disp.pos;
+    pos = pos2 & 0x3FF;
+    pos -= bg_w.pos_offset;
+    pos2 -= bg_w.pos_offset;
+    pos &= 0x3FF;
+    pos += quake_x_tbl[bg_w.quake_x_index];
+    pos2 += quake_x_tbl[bg_w.quake_x_index];
+    bg_w.bgw[bg_no].position_x = pos & 0x3FF;
+    bg_w.bgw[bg_no].abs_x = pos2;
+    pos2 = bg_w.bgw[bg_no].xy[1].disp.pos;
+    pos = pos2 & 0x3FF;
+    pos += quake_y_tbl[bg_w.quake_y_index];
+    pos2 += quake_y_tbl[bg_w.quake_y_index];
+    bg_w.bgw[bg_no].position_y = pos & 0x3FF;
+    bg_w.bgw[bg_no].abs_y = pos2;
+}
+
+void bg_pos_hosei2(void) {
+    s32 pos;
+    s32 pos2;
+    s16 i;
+
+    for (i = 0; i < bg_w.scno; i++) {
+        if (bg_w.chase_flag & 0xF) {
+            pos2 = bg_w.bgw[i].chase_xy[0].disp.pos;
+        } else {
+            pos2 = bg_w.bgw[i].wxy[0].disp.pos;
+        }
+        pos = pos2 & 0x3FF;
+        pos -= bg_w.pos_offset;
+        pos &= 0x3FF;
+        pos += quake_x_tbl[bg_w.quake_x_index];
+        bg_w.bgw[i].position_x = pos & 0x3FF;
+        pos2 -= bg_w.pos_offset;
+        pos2 += quake_x_tbl[bg_w.quake_x_index];
+        bg_w.bgw[i].abs_x = pos2;
+        if (bg_w.chase_flag & 0xF0) {
+            pos2 = bg_w.bgw[i].chase_xy[1].disp.pos;
+        } else {
+            pos2 = bg_w.bgw[i].xy[1].disp.pos;
+        }
+        pos = pos2 & 0x3FF;
+        pos += quake_y_tbl[bg_w.quake_y_index];
+        pos2 += quake_y_tbl[bg_w.quake_y_index];
+        bg_w.bgw[i].position_y = pos & 0x3FF;
+        bg_w.bgw[i].abs_y = pos2;
+    }
+}
+
+
+
+s16 get_center_position(void) {
+    if (Bonus_Game_Flag == BONUS_PARRY) {
+        return 0x200;
+    }
+    return bg_w.bgw[1].wxy[0].disp.pos;
+}
+
+
+
+s32 get_height_position(void) {
+    return bg_w.bgw[1].xy[1].disp.pos;
+}
+
+
+/* provisional name */
+void bg_quake_x_index_set(s16 ix) {
+    bg_w.quake_x_index = ix;
+}
+
+
+/* provisional name */
+void bg_quake_y_index_set(s16 ix) {
+    bg_w.quake_y_index = ix;
+}
+
+
+
+/* provisional name */
+void blit_16x16_tile(u16* src, s16 code, u16* dst, s16 attr) {
+    u16 i;
+    u16 j;
+    u16* d;
+    for (i = 0; i < 16; i++) {
+        d = dst;
+        for (j = 0; j < 16; j++) {
+            *d++ = *src++ + code;
+            *d++ = *src++ + attr;
+        }
+        dst += 0x80;
+    }
+}
+
+
+
+/* provisional name */
+void blit_8x16_tile(u16* src, s16 code, u16* dst, s16 attr) {
+    u16 i;
+    u16 j;
+    u16* d;
+    u16* s;
+    for (i = 0; i < 16; i++) {
+        d = dst;
+        s = src;
+        for (j = 0; j < 8; j++) {
+            *d++ = *s++ + code;
+            *d++ = *s++ + attr;
+        }
+        dst += 0x80;
+        src += 0x20;
+    }
+}
+
+
+
+/* provisional name */
+void bg_cell_write(s16 bg, s32 ofs, s32 cell, u32 src, u16 u5, s16 attr) {
+    u16* dst;
+    u32 base;
+    u16 code;
+    u16* s;
+    base = (u32)bg_w.bgw[bg].bg_address;
+    dst = (u16*)(ofs + base);
+    code = bg_w.scroll_cg_adr >> 7;
+    cell = cell << 10;
+    cell = cell + src;
+    s = (u16*)cell;
+    blit_16x16_tile(s, code, dst, attr);
+}
+
+
+
+/* provisional name */
+void blit_16x16_xflip(u16* src, s16 code, u16* dst, s16 attr) {
+    u16 i;
+    u16 j;
+    register u16* s;
+    u16* d;
+    u16* p;
+    p = src;
+    i = 0;
+    do {
+        d = dst;
+        for (j = 0; j < 16; j++) {
+            s = p + 30 - j * 2;
+            *d++ = *s++ + code;
+            *d = *s + attr;
+            *d++ |= 0x1000;
+        }
+        dst = dst + 0x80;
+        p += 0x20;
+    } while (++i < 16);
+}
+
+
+
+/* provisional name */
+void bg_cell_write_xflip(s16 bg, s32 ofs, s32 cell, u32 src, s16 u5, s16 attr) {
+    u16* dst;
+    u32 base;
+    u16 code;
+    u16* s;
+    base = (u32)bg_w.bgw[bg].bg_address;
+    ofs += base;
+    dst = (u16*)ofs;
+    code = 0;
+    code += bg_w.scroll_cg_adr >> 7;
+    cell = (cell << 10) + src;
+    s = (u16*)cell;
+    blit_16x16_xflip(s, code, dst, attr);
+}
+
+
+
+/* provisional name */
+void blit_16x16_yflip(register u16* src, s16 code, u16* dst, register s16 attr) {
+    u16 i;
+    u16 j;
+    s32 off;
+    u16* d;
+    register u16* s;
+    s32 q = (s32)src - 0x440;
+    i = 0;
+    off = 0x800;
+    do {
+        d = dst;
+        for (j = 0; j < 16; j = j + 1) {
+            s = (u16*)(off + q);
+            *d++ = *s++ + code;
+            *d = *s + attr;
+            *d++ |= 0x800;
+            q += 4;
+        }
+        dst += 0x80;
+        i++;
+        off += -0x80;
+    } while (i < 16);
+}
+
+
+
+/* provisional name */
+void bg_cell_write_yflip(s16 bg, s32 ofs, s32 cell, u32 src, s16 u5, s16 attr) {
+    u16* dst;
+    u32 base;
+    u16 code;
+    u16* s;
+    base = (u32)bg_w.bgw[bg].bg_address;
+    ofs += base;
+    dst = (u16*)ofs;
+    code = 0;
+    code += bg_w.scroll_cg_adr >> 7;
+    cell = (cell << 10) + src;
+    s = (u16*)cell;
+    blit_16x16_yflip(s, code, dst, attr);
+}
+
+
+
+/* provisional name */
+void blit_16x16_xyflip(u16* src, s16 code, u16* dst, s16 attr) {
+    u16 i;
+    u16 j;
+    s16 ix;
+    register u16* s;
+    u16* d;
+    s32 q;
+
+    q = (s32)src - 0x440;
+    for (i = 0; i < 16; i++) {
+        d = dst;
+        for (j = 0; j < 16; j++) {
+            ix = (32 - i * 2) * 32;
+            ix += (15 - j) << 1;
+            s = (u16*)(q + ix * 2);
+            *d++ = *s++ + code;
+            *d = *s + attr;
+            *d++ |= 0x1800;
+        }
+        dst += 0x80;
+        q += 0x40;
+    }
+}
+
+
+
+/* provisional name */
+void bg_cell_write_xyflip(s16 bg, s32 ofs, s32 cell, u32 src, s16 u5, s16 attr) {
+    u16* dst;
+    u32 base;
+    u16 code;
+    u16* s;
+    base = (u32)bg_w.bgw[bg].bg_address;
+    ofs += base;
+    dst = (u16*)ofs;
+    code = 0;
+    code += bg_w.scroll_cg_adr >> 7;
+    cell = (cell << 10) + src;
+    s = (u16*)cell;
+    blit_16x16_xyflip(s, code, dst, attr);
+}
+
+
+
+/* provisional name */
+void bg_cell_fill(s16 bg, s16 attr) {
+    bg_cell_write(bg, 0, 0, bg_cg_src_tbl[bg_w.bg_index], 0, attr);
+    bg_cell_write(bg, 0x40, 0, bg_cg_src_tbl[bg_w.bg_index], 0, attr);
+    bg_cell_write(bg, 0x80, 0, bg_cg_src_tbl[bg_w.bg_index], 0, attr);
+    bg_cell_write(bg, 0xC0, 0, bg_cg_src_tbl[bg_w.bg_index], 0, attr);
+    bg_cell_write(bg, 0x1000, 0, bg_cg_src_tbl[bg_w.bg_index], 0, attr);
+    bg_cell_write(bg, 0x1040, 0, bg_cg_src_tbl[bg_w.bg_index], 0, attr);
+    bg_cell_write(bg, 0x1080, 0, bg_cg_src_tbl[bg_w.bg_index], 0, attr);
+    bg_cell_write(bg, 0x10C0, 0, bg_cg_src_tbl[bg_w.bg_index], 0, attr);
+}
+
+
+
+/* provisional name */
+void bg_scr_write(void) {
+    s32 attr = bg_attr_tbl[bg_w.bg_index] + bg_attr_add_tbl[bg_w.bg_index];
+    s16 set;
+    const HUD_CELL** cells;
+    const HUD_CELL* c;
+    s16 i;
+    s16 j;
+    if (Country == 8) {
+        set = bg_cell_set_tbl[bg_w.stage];
+    } else {
+        set = 0;
+    }
+    cells = bg_rewrite_cell_tbl[set];
+    for (i = 0; i < bg_w.scno; i++) {
+        bg_cell_fill(i, attr);
+        for (j = 0; j < bg_cell_cnt_tbl[bg_w.bg_index][i]; j++) {
+            c = cells[i];
+            c += j;
+            bg_cell_write(i, c->ofs, c->cell, bg_cg_src_tbl[bg_w.bg_index], 0, attr);
+        }
+    }
+}
+
+
+
+/* provisional name */
+void ake_cell_write(s8 map, s32 ofs, s32 cell, u32 src) {
+    u16* dst;
+    u32 base;
+    u16 code;
+    u16* s;
+    base = ake_scrl_w[map].adrs;
+    ofs += base;
+    dst = (u16*)ofs;
+    code = 0;
+    code += bg_w.ake_cg_adr >> 7;
+    cell = (cell << 10) + src;
+    s = (u16*)cell;
+    blit_16x16_tile(s, code, dst, 0x3C0);
+}
+
+
+
+/* provisional name */
+void ake_cell_write_attr(s8 map, s32 ofs, s32 cell, u32 src, s16 attr) {
+    u16* dst;
+    u32 base;
+    u16 code;
+    u16* s;
+    base = ake_scrl_w[map].adrs;
+    ofs += base;
+    dst = (u16*)ofs;
+    code = 0;
+    code += bg_w.ake_cg_adr >> 7;
+    cell = (cell << 10) + src;
+    s = (u16*)cell;
+    blit_16x16_tile(s, code, dst, attr + 0x3C0);
+}
+
+
+
+/* provisional name */
+void akebono_cell_fill(void) {
+    ake_cell_write(1, 0x2000, 1, (u32)ake_scrn_data);
+    ake_cell_write(1, 0x2040, 2, (u32)ake_scrn_data);
+    ake_cell_write(1, 0x2080, 3, (u32)ake_scrn_data);
+    ake_cell_write(1, 0x20C0, 4, (u32)ake_scrn_data);
+    ake_cell_write(1, 0x3000, 5, (u32)ake_scrn_data);
+    ake_cell_write(1, 0x3040, 6, (u32)ake_scrn_data);
+    ake_cell_write(1, 0x3080, 7, (u32)ake_scrn_data);
+    ake_cell_write(1, 0x30C0, 8, (u32)ake_scrn_data);
+}
+
+
+/* provisional name */
+void akebono_scrn_move(s16 ix) {
+    s32 x = akebono_scrn_pos_tbl[ix][0] - bg_w.pos_offset;
+    s32 y = akebono_scrn_pos_tbl[ix][1];
+    Scrn_Move_Set(0, x, y);
+}
+
+/* provisional name */
+void akebono_scr_write(void) {
+    s16 *attr = ake_attr_tbl;
+    const PANEL *cell;
+    s16 i;
+
+    cell = ake_cell1_data;
+    for (i = 0; i < 16; i++) {
+        ake_cell_write_attr(1, cell->ofs, cell->cell, (u32)ake_scrn_data, *attr++);
+        cell++;
+    }
+    cell = ake_cell2_data;
+    for (i = 0; i < 8; i++) {
+        ake_cell_write(2, cell->ofs, cell->cell, (u32)ake_scrn_data);
+        cell++;
+    }
+}
+
+
+
+/* provisional name */
+void bg_etc_scr_write(s16 n) {
+    s16 i;
+    s16 j;
+    const TILEREQ* t;
+    s16 attr;
+
+    for (i = 0; i < bg_w.scno; i++) {
+        for (j = 0; j < etc_bg_cell_cnt_tbl[n][i]; j++) {
+            t = bg_etc_cell_tbl[n][i];
+            t = t + j;
+            attr = etc_bg_attr_tbl[n] + t->attr;
+            bg_cell_write(i, t->ofs, t->cell, etc_bg_cg_src_tbl[n], 0, attr);
+        }
+    }
+}
+
+
+
+/* provisional name */
+void bg_scr_clear_all(void) {
+    s32 i;
+    s32 j;
+    s32 k;
+
+    for (i = 0; i < bg_w.scno; i++) {
+        for (j = 0; j < bg_w.scno; j++) {
+            s32 dst = (s32)bg_w.bgw[i].bg_address;
+            dst += j << 12;
+
+            for (k = 0; k < 4; k++) {
+                u8* addr;
+                u16* target = (u16*)(dst + k * 0x40);
+                s16 code = bg_w.scroll_cg_adr >> 7;
+                addr = (u8*)0;
+                addr += bg_cg_src_tbl[bg_w.bg_index];
+                blit_16x16_tile((u16*)addr, code, target, 0);
+            }
+        }
+    }
+}
+
+
+
+void bg_work_clear(void) {
+    s16 i;
+    bg_w.bg_routine = 0;
+    bg_w.bg_r_1 = 0;
+    bg_w.bg_r_2 = 0;
+    bg_w.compel_on = 0;
+    win_sp_flag = 0;
+    bg_stop = 0;
+    bg_stop2 = 0;
+    akebono_flag = 0;
+    seraph_flag = 0;
+    aku_flag = 0;
+    sa_pa_flag = 0;
+    bg_app = 0;
+    bg_app_stop = 0;
+    for (i = 0; i < 7; i++) {
+        bg_w.bgw[i].r_no_0 = 0;
+        bg_w.bgw[i].r_no_1 = 0;
+        bg_w.bgw[i].r_no_2 = 0;
+    }
+}
+
+
+/* provisional name */
+void bg_work_clear_dummy(void) {}
+
+
+
+void compel_bg_init_position(void) {
+    s16 i;
+    bg_w.compel_on = 1;
+    Zoomf_Init();
+    bg_w.bg_f_x = 64;
+    bg_w.old_bg_f_x = 64;
+    bg_w.bg_f_y = 64;
+    bg_w.old_bg_f_y = 64;
+    bg_w.scr_stop = 0;
+    bg_w.frame_flag = 0;
+    bg_w.dmm0[0] = 0;
+    bg_w.bg2_sp_x2 = bg_w.bg2_sp_x = 0;
+    for (i = 0; i < 7; i++) {
+        bg_w.bgw[i].xy[0].disp.pos = bg_w.bgw[i].wxy[0].disp.pos = bg_w.bgw[i].pos_x_work;
+        bg_w.bgw[i].xy[1].disp.pos = bg_w.bgw[i].wxy[1].disp.pos = bg_w.bgw[i].pos_y_work;
+        bg_w.bgw[i].xy[0].disp.low = bg_w.bgw[i].wxy[0].disp.low = 0;
+        bg_w.bgw[i].xy[0].disp.low = bg_w.bgw[i].wxy[0].disp.low = 0;
+        if (bg_w.bgw[i].zuubun) {
+            suzi_line_clear(i);
+        }
+    }
+}
+
+
+
+void reset_all_char_display_with_backup(void) {
+    s16 i;
+    bg_w.compel_on = 0;
+    Zoomf_Init();
+    bg_w.bg_f_x = 64;
+    bg_w.old_bg_f_x = 64;
+    bg_w.bg_f_y = 64;
+    bg_w.old_bg_f_y = 64;
+    bg_w.scr_stop = 0;
+    bg_w.frame_flag = 0;
+    bg_w.dmm0[0] = 0;
+    bg_w.bg2_sp_x2 = bg_w.bg2_sp_x = 0;
+    for (i = 0; i < 7; i++) {
+        bg_w.bgw[i].xy[0].disp.pos = bg_w.bgw[i].wxy[0].disp.pos = bg_w.bgw[i].pos_x_work;
+        bg_w.bgw[i].xy[1].disp.pos = bg_w.bgw[i].wxy[1].disp.pos = bg_w.bgw[i].pos_y_work;
+        bg_w.bgw[i].xy[0].disp.low = bg_w.bgw[i].wxy[0].disp.low = 0;
+        bg_w.bgw[i].xy[0].disp.low = bg_w.bgw[i].wxy[0].disp.low = 0;
+        bg_w.bgw[i].old_pos_x = bg_w.bgw[i].wxy[0].disp.pos;
+        if (bg_w.bgw[i].zuubun) {
+            suzi_line_clear(i);
+        }
+    }
+}
+
+
+
+/* provisional name */
+void bg_rect_attr_preset(void) {
+    u16* p = scrn_map_ptr[0].ptr2;
+    oh_opening_demo(p, 0x20, 0x20, 0x1800, 0x10, 0x40, 0x24);
+}
+
+
+
+void oh_opening_demo(adrs, x, w, y, h, attr, prio)
+u16* adrs;
+s32 x;
+s16 w;
+s32 y;
+s16 h;
+s16 attr;
+s16 prio;
+{
+    s16 i;
+    u16 cell;
+    s16 j;
+    u16* p;
+    adrs += x;
+    adrs += y;
+    for (i = 0; i < h; i++) {
+        p = adrs;
+        for (j = 0; j < w; j++) {
+            cell = *++p;
+            cell &= 0xFE00;
+            cell |= attr;
+            cell |= prio;
+            *p = cell;
+            p++;
+        }
+        adrs += 0x80;
+    }
+}
+
+
+
+/* provisional name */
+void bg_rect_attr_add(adrs, x, w, y, h, bits, add)
+u16* adrs;
+s32 x;
+s16 w;
+s32 y;
+s16 h;
+s16 bits;
+s16 add;
+{
+    s16 i;
+    s16 j;
+    s16 cell;
+    u16* p;
+    adrs += x;
+    adrs += y;
+    for (i = 0; i < h; i++) {
+        p = adrs;
+        for (j = 0; j < w; j++) {
+            p++;
+            cell = *p;
+            cell = cell | bits;
+            *p++ = cell + add;
+        }
+        adrs += 0x80;
+    }
+}
+
+
+
+/* provisional name */
+s16 capcom_logo_color_step(void) {
+    s16 ret = 0;
+    switch (bg_w.bgw[1].r_no_2) {
+    case LSTEP_FIRST:
+        bg_w.bgw[1].l_limit--;
+        if (bg_w.bgw[1].l_limit < 0) {
+            bg_w.bgw[1].r_limit++;
+            bg_w.bgw[1].l_limit = 1;
+            if (bg_w.bgw[1].r_limit >= 90) {
+                bg_w.bgw[1].r_no_2++;
+                ret = 1;
+            }
+            bg_vbl_trans_flag = 1;
+        } else {
+            bg_vbl_trans_flag = 0;
+        }
+        break;
+    case LSTEP_LAST:
+        ret = 2;
+        bg_w.bgw[1].l_limit--;
+        if (bg_w.bgw[1].l_limit < 0) {
+            bg_w.bgw[1].r_limit++;
+            bg_w.bgw[1].l_limit = 1;
+            if (bg_w.bgw[1].r_limit >= 95) {
+                bg_w.bgw[1].r_no_2++;
+                ret = 3;
+                bg_vbl_trans_flag = 0;
+                Bg_Off_W(2);
+            } else {
+                bg_vbl_trans_flag = 1;
+            }
+        } else {
+            bg_vbl_trans_flag = 0;
+        }
+        break;
+    case LSTEP_DONE:
+        ret = 3;
+        break;
+    }
+    return ret;
+}
+
+
+
+/* provisional name */
+s16 capcom_logo_anim(void) {
+    s32 ret = 0;
+    switch (bg_w.bgw[1].r_no_1) {
+    case LOGO_INIT:
+        bg_w.bgw[1].r_no_1++;
+        bg_w.bgw[1].l_limit = 2;
+        bg_w.bgw[1].r_limit = 64;
+        bg_vbl_trans_flag = 0;
+        if (Demo_Sound != 0 || PB_Music_Off != 0) {
+            BGM_Request(48);
+        }
+        break;
+    case LOGO_COLOR:
+        if (capcom_logo_color_step()) {
+            bg_w.bgw[1].r_no_1 = LOGO_FADE;
+        }
+        break;
+    case LOGO_FADE:
+        if (Request_Fade(35, 0)) {
+            bg_w.bgw[1].r_no_1++;
+            Bg_On_W(1);
+        }
+        break;
+    case LOGO_FADE_WAIT:
+        capcom_logo_color_step();
+        if (Check_Fade_Complete()) {
+            bg_w.bgw[1].r_no_1++;
+        }
+        break;
+    case LOGO_OUT:
+        switch (capcom_logo_color_step()) {
+        case 1:
+        case 2:
+            break;
+        case 3:
+            bg_w.bgw[1].r_no_1++;
+            ret = 1;
+            break;
+        }
+        break;
+    case LOGO_END:
+        break;
+    }
+    return ret;
+}
+
+
+
+/* provisional name */
+void scroll_cell_write(s16 i, u32 ofs, u32 cell, u32 tbl) {
+    u16* dst;
+    u32 base;
+    s16 code;
+    u16* src;
+    base = eff_bg_adrs[i].adrs;
+    ofs += base;
+    dst = (u16*)ofs;
+    code = bg_w.scroll_cg_adr >> 7;
+    cell = (cell << 10) + tbl;
+    src = (u16*)cell;
+    blit_16x16_tile(src, code, dst, 0x280);
+}
+
+
+
+/* provisional name */
+void bg_extra_color_trans(void) {
+    load_bg_color(0x2C);
+    load_bg_color(0x2D);
+}
+
+void bg_base_move_common(void) {
+    bg_base_x_move_check();
+    bg_base_y_move_check();
+    if (Bonus_Game_Flag) {
+        goto end;
+    }
+    chase_start_check();
+    if (bg_w.chase_flag) {
+        chase_xy_move();
+    }
+end:
+    ;
+}
+
+
+
+void bg_move_common(void) {
+    bg_x_move_check();
+    bg_y_move_check();
+}
+
+
+/* provisional name */
+void bg_move_common_dummy(void) {}
+
+
+
+void bg_initialize(void) {
+    const s16* ptr;
+    const BG_GFX* gfx;
+    s32 n;
+    s16 i;
+    Family_Init();
+    clear_scroll_layer_state_and_mask();
+    scrn_pos_clear();
+    Zoomf_Init();
+    bg_w.bg_index = bg_index_tbl[bg_w.stage][bg_w.area];
+    bg_w.scno = use_scr[bg_w.bg_index];
+    n = bg_gfx_tbl[bg_w.bg_index].size << 4;
+    n = (n + 0xFFF) / 0x1000;
+    scr_cg_c_no = simmram_block_alloc_10(n, 1);
+    bg_w.scroll_cg_adr = simmram_slot_to_offset(scr_cg_c_no);
+    gfx = &bg_gfx_tbl[bg_w.bg_index];
+    load_bg_color(bg_palette_no_tbl[bg_w.bg_index]);
+    chr_dma_request(gfx->prep, 0, 0, 3);
+    chr_dma_request(gfx->src, bg_w.scroll_cg_adr, gfx->size, 1);
+    if (Game_setting.Screen_Mode) {
+        bg_w.pos_offset = 0xF8;
+    } else {
+        bg_w.pos_offset = 0xC0;
+    }
+    for (i = 0; i < 7; i++) {
+        bg_w.bgw[i].pos_x_work = bg_w.bgw[i].pos_y_work = 0;
+        bg_w.bgw[i].zuubun = 0;
+        bg_w.bgw[i].xy[0].cal = 0;
+        bg_w.bgw[i].xy[1].cal = 0;
+        bg_w.bgw[i].wxy[0].cal = 0;
+        bg_w.bgw[i].wxy[1].cal = 0;
+        bg_w.bgw[i].hos_xy[0].cal = 0;
+        bg_w.bgw[i].hos_xy[1].cal = 0;
+        bg_w.bgw[i].speed_x = 0;
+        bg_w.bgw[i].speed_y = 0;
+        bg_w.bgw[i].rewrite_flag = 0;
+        bg_w.bgw[i].fam_no = i;
+        bg_w.bgw[i].r_no_1 = bg_w.bgw[i].r_no_2 = 0;
+        bg_w.bgw[i].speed_x = 0;
+    }
+    for (i = 0; i < bg_w.scno; i++) {
+        bg_w.bgw[i].bg_adrs_c_no = simmram_big_page_alloc_40(1);
+        bg_w.bgw[i].bg_address = (u16 *)simmram_slot_addr(bg_w.bgw[i].bg_adrs_c_no);
+        scrn_map_set_now(i, (u32)bg_w.bgw[i].bg_address);
+        scrn_map_set(i, (u32)bg_w.bgw[i].bg_address);
+        ptr = bg_map_tbl[bg_w.bg_index][i];
+        sprite_list_setup(i, 1, ptr);
+    }
+    bg_scr_write();
+    bg_w.scr_stop = 0;
+    bg_w.frame_flag = 0;
+    bg_w.dmm0[0] = 0;
+    bg_w.bg_f_x = 64;
+    bg_w.old_bg_f_x = 64;
+    bg_w.bg_f_y = 64;
+    bg_w.old_bg_f_y = 64;
+    bg_w.dmm1 = 1;
+    bg_w.bg2_sp_x2 = bg_w.bg2_sp_x = 0;
+    bg_sp_work = 0;
+    bg_land_flag = 0;
+    bg_etc_flag = 0;
+    bg_stop2 = 0;
+    bg_w.max_x = 8;
+    bg_w.old_chase_flag = bg_w.chase_flag = 0;
+    bg_zoom_x_pos = 0xC0;
+    bg_w.quake_x_index = 0;
+    bg_w.quake_y_index = 0;
+    bg_w.frame_deff = 64;
+    bg_ofs_work[0] = bg_ofs_work[1] = bg_ofs_work[2] = 0;
+    for (i = 0; i < bg_w.scno; i++) {
+        Bg_On_R(1 << i);
+        Bg_Off_R(16 << i);
+        scrn_attr_set(i, 0, bg_prio_tbl[bg_w.bg_index][i]);
+        scrn_reg_w[i].ctrl &= 0xFE7F;
+        bg_w.bgw[i].speed_x = msp[bg_w.bg_index][i][0];
+        bg_w.bgw[i].speed_y = msp[bg_w.bg_index][i][1];
+        bg_w.bgw[i].rewrite_flag = 0;
+        bg_w.bgw[i].xy[1].disp.pos = bg_w.bgw[i].wxy[1].disp.pos = bg_w.bgw[i].pos_y_work = 0;
+        ptr = limit_tbl3[bg_w.bg_index][i];
+        bg_w.bgw[i].l_limit = *ptr++;
+        bg_w.bgw[i].r_limit = *ptr++;
+        bg_w.bgw[i].l_limit2 = *ptr++;
+        bg_w.bgw[i].r_limit2 = *ptr++;
+        bg_w.bgw[i].y_limit = *ptr++;
+        bg_w.bgw[i].y_limit2 = *ptr;
+        if (!Game_setting.Screen_Mode) {
+            bg_w.bgw[i].r_limit2 = bg_w.bgw[i].r_limit;
+            bg_w.bgw[i].l_limit2 = bg_w.bgw[i].l_limit;
+        }
+        bg_w.bgw[i].frame_deff = 0;
+        bg_w.bgw[i].max_x_limit = bg_w.bgw[i].speed_x * bg_w.max_x;
+    }
+    if (bg_w.stage != 4) {
+        base_y_pos = 40;
+    } else {
+        base_y_pos = 48;
+    }
+    bg_pos_hosei2();
+    Bg_Family_Set();
+}
+
+/* provisional name */
+void bg_color_trans(void) {
+    load_bg_color(bg_color2_tbl[bg_w.bg_index]);
+}
+
+
+
+void akebono_initialize(void) {
+    ake_cg_c_no = simmram_block_alloc_10(21, 1);
+    bg_w.ake_cg_adr = simmram_slot_to_offset(ake_cg_c_no);
+    load_any_color(140);
+    load_any_color(143);
+    chr_dma_request(0x0209F800, 0, 0, 3);
+    chr_dma_request(0x0209F880, bg_w.ake_cg_adr, 0x14FF, 1);
+    ake_scrl_w[1].handle = simmram_big_page_alloc_40(1);
+    ake_scrl_w[1].adrs = simmram_slot_addr(ake_scrl_w[1].handle);
+    ake_scrl_w[2].handle = simmram_big_page_alloc_40(1);
+    ake_scrl_w[2].adrs = simmram_slot_addr(ake_scrl_w[2].handle);
+    scrn_map_set_now(3, (u32)bg_w.bgw[3].bg_address);
+    scrn_map_set(3, (u32)bg_w.bgw[3].bg_address);
+    bg_w.bgw[3].xy[0].cal = bg_w.bgw[3].wxy[0].cal = 0x100000;
+    bg_w.bgw[3].xy[1].cal = bg_w.bgw[3].wxy[1].cal = 0;
+    bg_w.bgw[3].position_x = 256 - bg_w.pos_offset;
+    bg_w.bgw[3].position_y = 0;
+    ake_Family_Set();
+    ake_scrl_w[0].pos_x = 512 - bg_w.pos_offset;
+    ake_scrl_w[0].pos_y = 0;
+    ake_scrl_w[0].xy[0].cal = 0x2000000;
+    ake_scrl_w[0].xy[1].cal = 0;
+    sprite_list_setup(3, 1, ake_scr_record_data);
+    bg_w.bgw[3].r_no_1 = bg_w.bgw[3].r_no_2 = 0;
+    bg_w.bgw[3].fam_no = 3;
+    akebono_scr_write();
+    scrn_reg_w[3].ctrl &= 0xFE7F;
+    scrn_attr_set(3, 0, 24);
+    Bg_Off_R(8);
+}
+
+
+
+void bg_etc_write(s16 type) {
+    u8 mode;
+    const BG_GFX* gfx;
+    s32 n;
+    const s16* ptr;
+    s16 i;
+    s16 j;
+    Family_Init();
+    clear_scroll_layer_state_and_mask();
+    scrn_pos_clear();
+    Zoomf_Init();
+    n = ((etc_bg_gfx_tbl[type].size << 4) + 0xFFF) / 0x1000;
+    scr_cg_c_no = simmram_block_alloc_10(n, 1);
+    bg_w.scroll_cg_adr = simmram_slot_to_offset(scr_cg_c_no);
+    bg_w.scno = use_scr2[type];
+    switch (type) {
+    case 5:
+    case 6:
+        break;
+    case 4:
+        load_any_color(etc_bg_color_tbl[type]);
+        load_any_color(40);
+        break;
+    default:
+        load_any_color(etc_bg_color_tbl[type]);
+        break;
+    }
+    gfx = &etc_bg_gfx_tbl[type];
+    chr_dma_request(gfx->prep, 0, 0, 3);
+    mode = gfx->mode;
+    chr_dma_request(gfx->src, bg_w.scroll_cg_adr, gfx->size, mode);
+    bg_w.pos_offset = Game_setting.Screen_Mode ? 0xF8 : 0xC0;
+    for (i = 0; i < 7; i++) {
+        bg_w.bgw[i].pos_x_work = 0;
+        bg_w.bgw[i].pos_y_work = 0;
+        bg_w.bgw[i].zuubun = 0;
+        bg_w.bgw[i].xy[0].cal = 0;
+        bg_w.bgw[i].xy[1].cal = 0;
+        bg_w.bgw[i].wxy[0].cal = 0;
+        bg_w.bgw[i].wxy[1].cal = 0;
+        bg_w.bgw[i].hos_xy[0].cal = 0;
+        bg_w.bgw[i].hos_xy[1].cal = 0;
+        bg_w.bgw[i].rewrite_flag = 0;
+        bg_w.bgw[i].fam_no = i;
+        bg_w.bgw[i].speed_x = 0;
+        bg_w.bgw[i].speed_y = 0;
+        bg_w.bgw[i].r_no_1 = bg_w.bgw[i].r_no_2 = 0;
+    }
+    for (i = 0; i < bg_w.scno; i++) {
+        bg_w.bgw[i].bg_adrs_c_no = simmram_big_page_alloc_40(1);
+        bg_w.bgw[i].bg_address = (u16 *)simmram_slot_addr(bg_w.bgw[i].bg_adrs_c_no);
+        scrn_map_set_now(i, (u32)bg_w.bgw[i].bg_address);
+        scrn_map_set(i, (u32)bg_w.bgw[i].bg_address);
+        ptr = bg_map_tbl2[type][i];
+        sprite_list_setup(i, 1, ptr);
+    }
+    bg_etc_scr_write(type);
+    bg_w.scr_stop = 0;
+    bg_w.frame_flag = 0;
+    bg_w.dmm0[0] = 0;
+    bg_land_flag = 0;
+    bg_etc_flag = 0;
+    bg_w.old_chase_flag = bg_w.chase_flag = 0;
+    bg_w.bg_f_x = 64;
+    bg_w.old_bg_f_x = 64;
+    bg_w.bg_f_y = 64;
+    bg_w.old_bg_f_y = 64;
+    bg_w.dmm1 = 1;
+    bg_w.bg2_sp_x2 = bg_w.bg2_sp_x = 0;
+    bg_sp_work = 0;
+    bg_stop2 = 0;
+    bg_w.max_x = 8;
+    bg_zoom_x_pos = 0xC0;
+    bg_w.quake_y_index = bg_w.quake_x_index = 0;
+    for (j = 0; j < bg_w.scno; j++) {
+        Bg_Off_R(16 << j);
+        Bg_On_R(1 << j);
+        scrn_attr_set(j, 0, 24);
+        scrn_reg_w[j].ctrl &= 0xFE7F;
+        bg_w.bgw[j].hos_xy[0].cal = bg_w.bgw[j].wxy[0].cal = bg_w.bgw[j].xy[0].cal = bg_pos_tbl2[type][j][0];
+        bg_w.bgw[j].hos_xy[1].cal = bg_w.bgw[j].wxy[1].cal = bg_w.bgw[j].xy[1].cal = bg_pos_tbl2[type][j][1];
+        bg_w.bgw[j].pos_y_work = bg_w.bgw[j].xy[1].disp.pos;
+        bg_w.bgw[j].old_pos_x = bg_w.bgw[j].pos_x_work = bg_w.bgw[j].xy[0].disp.pos;
+        bg_w.bgw[j].speed_x = msp2[type][j][0];
+        bg_w.bgw[j].speed_y = msp2[type][j][1];
+        bg_w.bgw[j].rewrite_flag = 0;
+        bg_w.bgw[j].zuubun = etc_bg_zuubun_tbl[type][j];
+        bg_w.bgw[j].frame_deff = 64;
+        bg_w.bgw[j].max_x_limit = bg_w.bgw[j].speed_x * bg_w.max_x;
+    }
+    if (type == 1 && Game_setting.Screen_Mode) {
+        bg_w.bgw[0].wxy[0].cal = bg_w.bgw[0].xy[0].cal = 0x2000000;
+        bg_w.bgw[0].pos_x_work = 0x200;
+    }
+    base_y_pos = 40;
+}
+
+
+
+void BG000(void) {
+    bgw_ptr = &bg_w.bgw[1];
+    bg0001_ctrl();
+    bgw_ptr = &bg_w.bgw[0];
+    bg0000();
+    zoom_ud_check();
+    bg_pos_hosei2();
+    Bg_Family_Set();
+}
+
+
+
+void bg0001_ctrl(void) {
+    void (*bg0401_jmp[3])() = { bg0001_init00, bg0000_demo, bg_base_move_common };
+    bg0401_jmp[bgw_ptr->r_no_0]();
+}
+
+
+
+void bg0001_init00(void) {
+    bgw_ptr->r_no_0++;
+    bgw_ptr->old_pos_x = bgw_ptr->xy[0].disp.pos = bgw_ptr->pos_x_work = 0x1D0;
+    bgw_ptr->hos_xy[0].disp.pos = bgw_ptr->wxy[0].cal = bgw_ptr->xy[0].cal;
+    bgw_ptr->zuubun = 0;
+    load_char_gfx(0xDC40, 1);
+    effect_06_init();
+    effect_44_init(7);
+    effect_60_init(2);
+    if (bg_w.area) {
+        bgw_ptr->r_no_0 = R0_MOVE;
+    } else if (gill_appear_check()) {
+        bgw_ptr->r_no_0 = R0_MOVE;
+    } else {
+        if (plw[0].player_number == PL_GILL) {
+            bgw_ptr->u_line = 0;
+            bgw_ptr->xy[0].cal += bgw_ptr->speed_x * 0xE0;
+            bgw_ptr->old_pos_x = bgw_ptr->hos_xy[0].cal = bgw_ptr->wxy[0].cal = bgw_ptr->xy[0].cal;
+        } else {
+            bgw_ptr->u_line = 1;
+            bgw_ptr->xy[0].cal -= bgw_ptr->speed_x * 0xC0;
+            bgw_ptr->old_pos_x = bgw_ptr->hos_xy[0].cal = bgw_ptr->wxy[0].cal = bgw_ptr->xy[0].cal;
+        }
+    }
+}
+
+
+
+void bg0000(void) {
+    void (*bg0000_jmp[3])() = { bg0000_init00, bg0000_demo, bg_move_common };
+    bg0000_jmp[bgw_ptr->r_no_0]();
+}
+
+
+
+void bg0000_init00(void) {
+    bgw_ptr->r_no_0++;
+    bgw_ptr->old_pos_x = bgw_ptr->xy[0].disp.pos = bgw_ptr->pos_x_work = 0x1D0;
+    bgw_ptr->hos_xy[0].cal = bgw_ptr->wxy[0].cal = bgw_ptr->xy[0].cal;
+    bgw_ptr->zuubun = 0;
+    if (gill_appear_check()) {
+        bgw_ptr->r_no_0 = R0_MOVE;
+        bg_app = 0;
+    } else {
+        bg_app = 1;
+        if (plw[0].player_number == PL_GILL) {
+            bgw_ptr->u_line = 0;
+            bgw_ptr->xy[0].cal += bgw_ptr->speed_x * 0xE0;
+            bgw_ptr->old_pos_x = bgw_ptr->hos_xy[0].cal = bgw_ptr->wxy[0].cal = bgw_ptr->xy[0].cal;
+        } else {
+            bgw_ptr->u_line = 1;
+            bgw_ptr->xy[0].cal -= bgw_ptr->speed_x * 0xC0;
+            bgw_ptr->old_pos_x = bgw_ptr->hos_xy[0].cal = bgw_ptr->wxy[0].cal = bgw_ptr->xy[0].cal;
+        }
+    }
+}
+
+
+
+void bg0000_demo(void) {
+    switch (bgw_ptr->r_no_1) {
+    case 0:
+        bgw_ptr->r_no_1++;
+        bgw_ptr->free = 0x1E;
+        break;
+    case 1:
+        bgw_ptr->free--;
+        if (bgw_ptr->free > 0) {
+            break;
+        }
+        bgw_ptr->r_no_1++;
+        break;
+    case 2:
+        if (bgw_ptr->u_line) {
+            bgw_ptr->wxy[0].cal += bgw_ptr->speed_x;
+            if (bgw_ptr->wxy[0].disp.pos > 0x1D0) {
+                bgw_ptr->r_no_1++;
+                bgw_ptr->wxy[0].disp.pos = 0x1D0;
+                bgw_ptr->wxy[0].disp.low = 0;
+                bgw_ptr->xy[0].cal = bgw_ptr->wxy[0].cal;
+                bgw_ptr->old_pos_x = 0x1D0;
+            }
+        } else {
+            bgw_ptr->wxy[0].cal -= bgw_ptr->speed_x;
+            if (bgw_ptr->wxy[0].disp.pos < 0x1D0) {
+                bgw_ptr->r_no_1++;
+                bgw_ptr->wxy[0].disp.pos = 0x1D0;
+                bgw_ptr->wxy[0].disp.low = 0;
+                bgw_ptr->xy[0].cal = bgw_ptr->wxy[0].cal;
+                bgw_ptr->old_pos_x = 0x1D0;
+            }
+        }
+        break;
+    case 3:
+        bg_app = 0;
+        bgw_ptr->r_no_0 = R0_MOVE;
+        break;
+    }
+}
+
+
+
+/* provisional name */
+void bg0000_demo_effect_set(void) {
+    effect_44_init(9);
+}
+
+
+
+void BG010(void) {
+    bgw_ptr = &bg_w.bgw[1];
+    bg0102();
+    bgw_ptr = &bg_w.bgw[0];
+    bg0101();
+    bgw_ptr = &bg_w.bgw[2];
+    bg0103();
+    zoom_ud_check();
+    bg_pos_hosei2();
+    Bg_Family_Set();
+}
+
+
+
+void bg0101(void) {
+    void (*bg1601_jmp[2])() = { bg0101_init00, bg_move_common };
+    bg1601_jmp[bgw_ptr->r_no_0]();
+}
+
+
+
+void bg0101_init00(void) {
+    bgw_ptr->r_no_0++;
+    bgw_ptr->old_pos_x = bgw_ptr->xy[0].disp.pos = bgw_ptr->pos_x_work = 0x200;
+    bgw_ptr->hos_xy[0].disp.pos = bgw_ptr->wxy[0].cal = bgw_ptr->xy[0].cal;
+    bgw_ptr->zuubun = 0;
+    load_char_gfx(0xD8D0, 1);
+    effect_07_init();
+    effect_05_init();
+    effect_06_init();
+    effect_11_init();
+}
+
+
+
+void bg0102(void) {
+    void (*bg0602_jmp[2])() = { bg0102_init00, bg_base_move_common };
+    bg0602_jmp[bgw_ptr->r_no_0]();
+}
+
+
+
+void bg0102_init00(void) {
+    bgw_ptr->r_no_0++;
+    bgw_ptr->old_pos_x = bgw_ptr->xy[0].disp.pos = bgw_ptr->pos_x_work = 0x200;
+    bgw_ptr->hos_xy[0].cal = bgw_ptr->wxy[0].cal = bgw_ptr->xy[0].cal;
+    bgw_ptr->zuubun = 0;
+}
+
+
+
+void bg0103(void) {
+    switch (bgw_ptr->r_no_0) {
+    case SYNC_INIT:
+        bgw_ptr->r_no_0++;
+        bgw_ptr->old_pos_x = bgw_ptr->xy[0].disp.pos = bgw_ptr->pos_x_work = 0x200;
+        bgw_ptr->hos_xy[0].cal = bgw_ptr->wxy[0].cal = bgw_ptr->xy[0].cal;
+        bgw_ptr->xy[1].disp.pos = bgw_ptr->pos_y_work = 0;
+        bgw_ptr->fam_no = 2;
+        bgw_ptr->xy[0].disp.low = bgw_ptr->xy[1].disp.low = 0;
+        bgw_ptr->y_limit = bgw_ptr->y_limit2 = 0xF0;
+        bgw_ptr->speed_x = 0xB000;
+        bgw_ptr->speed_y = 0xE000;
+        sync_fam_set3(2);
+        break;
+    case SYNC_MOVE:
+        bg_x_move_check();
+        bg_y_move_check();
+        sync_fam_set3(2);
+        break;
+    }
+}
+
+/* 02006584 */
+s16 ake_attr_tbl[16] = {
+    0, 0, 1, 1, 2, 2, 3, 3,
+    4, 4, 5, 5, 6, 6, 7, 7,
+};
+/* 020065A4 */
+const s16* bg_map_tbl[23][3] = {
+    { bg_scr_record_data, bg_scr_record_00_1, bg_scr_record_00_2 },
+    { bg_scr_record_01_0, bg_scr_record_00_1, 0 },
+    { bg_scr_record_02_0, bg_scr_record_02_1, bg_scr_record_02_2 },
+    { bg_scr_record_03_0, bg_scr_record_00_1, 0 },
+    { bg_scr_record_01_0, bg_scr_record_00_1, 0 },
+    { bg_scr_record_05_0, bg_scr_record_00_1, 0 },
+    { bg_scr_record_01_0, bg_scr_record_00_1, 0 },
+    { bg_scr_record_07_0, bg_scr_record_00_1, 0 },
+    { bg_scr_record_08_0, bg_scr_record_08_1, bg_scr_record_08_2 },
+    { bg_scr_record_09_0, bg_scr_record_09_1, 0 },
+    { bg_scr_record_10_0, bg_scr_record_00_1, 0 },
+    { bg_scr_record_01_0, bg_scr_record_11_1, 0 },
+    { bg_scr_record_12_0, bg_scr_record_12_1, 0 },
+    { bg_scr_record_13_0, bg_scr_record_00_1, 0 },
+    { bg_scr_record_14_0, bg_scr_record_00_1, 0 },
+    { bg_scr_record_14_0, bg_scr_record_00_1, 0 },
+    { bg_scr_record_16_0, bg_scr_record_00_1, 0 },
+    { bg_scr_record_17_0, bg_scr_record_00_1, 0 },
+    { bg_scr_record_18_0, bg_scr_record_18_1, 0 },
+    { bg_scr_record_05_0, bg_scr_record_00_1, 0 },
+    { bg_scr_record_01_0, bg_scr_record_20_1, 0 },
+    { bg_scr_record_21_0, bg_scr_record_21_1, 0 },
+    { bg_scr_record_22_0, bg_scr_record_22_1, 0 },
+};
+/* 020066B8 */
+const s16* bg_map_tbl2[12][3] = {
+    { etc_bg_scr_record_0_0, bg_scr_record_00_1, 0 },
+    { bg_scr_record_data, 0, 0 },
+    { bg_scr_record_data, 0, 0 },
+    { bg_scr_record_data, 0, 0 },
+    { bg_scr_record_data, bg_scr_record_00_1, 0 },
+    { bg_scr_record_data, 0, 0 },
+    { etc_bg_scr_record_0_0, 0, 0 },
+    { bg_scr_record_data, 0, 0 },
+    { etc_bg_scr_record_0_0, 0, 0 },
+    { etc_bg_scr_record_0_0, 0, 0 },
+    { etc_bg_scr_record_0_0, 0, 0 },
+    { bg_scr_record_data, 0, 0 },
+};
+/* 02006748 */
+const HUD_CELL* bg_rewrite_cell_tbl[6][3] = {
+    { bg_rewrite_cells0, bg_rewrite_cells1, bg_rewrite_cells2 },
+    { bg_rewrite_cells4, bg_rewrite_cells1, bg_rewrite_cells2 },
+    { bg_rewrite_cells9, bg_rewrite_cells6, bg_rewrite_cells7 },
+    { bg_rewrite_cells0, bg_rewrite_cells3, bg_rewrite_cells2 },
+    { bg_rewrite_cells0, bg_rewrite_cells1, bg_rewrite_cells2 },
+    { bg_rewrite_cells0, bg_rewrite_cells5, bg_rewrite_cells2 },
+};
+/* 02006790 */
+const TILEREQ* bg_etc_cell_tbl[12][3] = {
+    { bg_etc_cells0, 0, 0 },
+    { bg_etc_cells4, 0, 0 },
+    { bg_etc_cells5, 0, 0 },
+    { bg_etc_cells7, 0, 0 },
+    { bg_etc_cells8, bg_etc_cells9, 0 },
+    { bg_etc_cells10, 0, 0 },
+    { bg_etc_cells11, 0, 0 },
+    { bg_etc_cells12, 0, 0 },
+    { bg_etc_cells1, 0, 0 },
+    { bg_etc_cells2, 0, 0 },
+    { bg_etc_cells3, 0, 0 },
+    { bg_etc_cells6, 0, 0 },
+};

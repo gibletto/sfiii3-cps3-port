@@ -1,0 +1,162 @@
+/*
+ * EFF19.C  Effect 19: stage object reacting to quakes (bg130)
+ *
+ * effect_19_move animates the object and, according to bg_w.quake_y_index, picks a random
+ * reaction from small tables: wait, jump up and fall, or play an animation and vanish while a
+ * player is in range, then reappear. effect_19_init is called from bg130.
+ */
+
+#include "structs.h"
+#include "work.h"
+#include "romdata.h"
+#include "extern.h"
+#include "ta_sub.h"
+#include "CHARMOVE.h"
+#include "charmove_2.h"
+#include "EFFECT.h"
+#include "effect_2.h"
+#include "PLS02.h"
+#include "aboutspr.h"
+#include "bg_sub.h"
+#include "bg_sub_2.h"
+#include "bg_sub_3.h"
+#include "bg_sub_4.h"
+#include "bg_sub_5.h"
+#include "EFF19.h"
+
+/* routine_no[0] */
+#define R0_INIT         0       /* start the idle animation */
+#define R0_MOVE         1       /* react to the quake */
+
+/* routine_no[1] */
+#define R1_IDLE         0       /* wait for a quake, pick a reaction */
+#define R1_WAIT         1       /* count the wait down */
+#define R1_FALL         2       /* fall to height 66 */
+#define R1_ANIM         3       /* play the animation, then vanish */
+#define R1_HIDE         4       /* hidden while a player is in range */
+
+
+
+void effect_19_move(WORK_Other* ewk) {
+    if (obr_no_disp_check()) {
+        return;
+    }
+    switch (ewk->wu.routine_no[0]) {
+    case R0_INIT:
+        ewk->wu.routine_no[0]++;
+        ewk->wu.disp_flag = 1;
+        set_char_move_init(&ewk->wu, 0, 6);
+        break;
+    case R0_MOVE:
+        if (!EXE_flag && !Game_pause && !EXE_obroll) {
+            eff19_quake_sub(ewk);
+        }
+        disp_pos_trans_entry_r(ewk);
+        break;
+    default:
+        all_cgps_put_back(&ewk->wu);
+        push_effect_work(&ewk->wu);
+        break;
+    }
+}
+
+void eff19_quake_sub(WORK_Other* ewk) {
+    s16 rnd;
+    s8 sel;
+
+    switch (ewk->wu.routine_no[1]) {
+    case R1_IDLE:
+        if (bg_w.quake_y_index > 2) {
+            rnd = random_16_com();
+            if (bg_w.quake_y_index < 8) {
+                sel = effect_19_s_tbl[rnd];
+            } else {
+                if (bg_w.quake_y_index > 14) {
+                    sel = effect_19_l_tbl[rnd];
+                } else {
+                    sel = effect_19_m_tbl[rnd];
+                }
+            }
+            if (sel) {
+                ewk->wu.routine_no[1]++;
+                ewk->wu.routine_no[2] = 0;
+                ewk->wu.mvxy.a[1].sp = 0;
+                ewk->wu.mvxy.d[1].sp = -0x6000;
+                ewk->wu.old_rno[0] = eff19_wait_tbl[rnd];
+            } else {
+                ewk->wu.routine_no[1]++;
+                ewk->wu.routine_no[2] = 1;
+                ewk->wu.old_rno[0] = 60;
+            }
+        }
+        break;
+    case R1_WAIT:
+        if (ewk->wu.routine_no[2]) {
+            ewk->wu.old_rno[0]--;
+            if (ewk->wu.old_rno[0] < 0) {
+                ewk->wu.routine_no[1] = R1_IDLE;
+                set_char_move_init(&ewk->wu, 0, 6);
+            }
+        } else {
+            ewk->wu.old_rno[0]--;
+            if (ewk->wu.old_rno[0] < 0) {
+                ewk->wu.routine_no[1]++;
+            }
+        }
+        break;
+    case R1_FALL:
+        add_y_sub(ewk);
+        if (ewk->wu.xyz[1].disp.pos < 66) {
+            ewk->wu.routine_no[1]++;
+        }
+        break;
+    case R1_ANIM:
+        char_move(&ewk->wu);
+        if (ewk->wu.cg_type) {
+            ewk->wu.routine_no[1]++;
+            ewk->wu.disp_flag = 0;
+        }
+        break;
+    case R1_HIDE:
+        if (range_x_check(&ewk->wu) == 0) {
+            ewk->wu.routine_no[1] = R1_IDLE;
+            ewk->wu.disp_flag = 1;
+            ewk->wu.xyz[1].disp.pos = eff19_data_tbl[ewk->wu.type * 2 + 1];
+            set_char_move_init(&ewk->wu, 0, 6);
+        }
+        break;
+    }
+}
+
+
+
+s32 effect_19_init(void) {
+    WORK_Other* ewk;
+    s16 ix;
+    s16 i;
+    const s16* data_ptr = eff19_data_tbl;
+    for (i = 0; i < 7; i++) {
+        if ((ix = pull_effect_work(4)) == -1) {
+            return -1;
+        }
+        ewk = (WORK_Other*)frw[ix];
+        ewk->wu.be_flag = 1;
+        ewk->wu.id = 19;
+        ewk->wu.cgromtype = 1;
+        ewk->wu.rl_flag = 0;
+        ewk->wu.dead_f = 1;
+        ewk->wu.type = i;
+        ewk->wu.work_id = 16;
+        ewk->wu.my_family = 2;
+        ewk->wu.char_index = 6;
+        ewk->wu.char_table[0] = jp3_char_table;
+        ewk->wu.sync_suzi = 0;
+        ewk->wu.my_col_mode = 0x4200;
+        ewk->wu.my_col_code = 0x2080;
+        ewk->wu.my_priority = ewk->wu.position_z = 80;
+        ewk->wu.xyz[0].disp.pos = *data_ptr++;
+        ewk->wu.xyz[1].disp.pos = *data_ptr++;
+        suzi_offset_set(&ewk->wu);
+    }
+    return 0;
+}

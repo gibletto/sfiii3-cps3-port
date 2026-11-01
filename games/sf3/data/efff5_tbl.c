@@ -1,0 +1,36 @@
+/*
+ * EFFF5_TBL.C  opening demo picture object table (effect F5)
+ *
+ * efff5_data_tbl has one row per object type: move routine, x, y, priority, animation number
+ * and a flag word, copied into the object by effect_F5_init. Read by EFFF5.C.
+ */
+
+#include "types.h"
+#include "structs.h"
+
+#pragma section TBL
+
+const s16 efff5_data_tbl[22][6] = {
+    { 8, 512, 144, 71, 100, 0 },
+    { 0, 512, 48, 50, 54, 1 },
+    { 1, 512, 40, 52, 62, 1 },
+    { 0, 512, 48, 50, 57, 1 },
+    { 2, 512, 64, 78, 58, 1 },
+    { 2, 512, 0, 78, 58, 1 },
+    { 0, 512, 48, 50, 63, 1 },
+    { 0, 512, 48, 50, 64, 1 },
+    { 3, 512, 53, 52, 58, 0 },
+    { 4, 688, 126, 70, 66, 0 },
+    { 5, 512, 48, 50, 52, 1 },
+    { 5, 512, 48, 50, 54, 1 },
+    { 5, 512, 48, 50, 63, 1 },
+    { 5, 512, 48, 50, 64, 1 },
+    { 4, 688, 126, 70, 24, 0 },
+    { 7, 512, 48, 84, 86, 0 },
+    { 8, 512, 144, 71, 91, 0 },
+    { 8, 512, 144, 70, 92, 0 },
+    { 8, 512, 144, 72, 93, 0 },
+    { 9, 512, 144, 68, 93, 0 },
+    { 10, 608, 408, 54, 91, 0 },
+    { 11, 864, 120, 54, 92, 0 },
+};

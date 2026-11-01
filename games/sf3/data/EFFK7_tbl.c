@@ -1,0 +1,33 @@
+/*
+ * EFFK7_TBL.C  blink sequences of the metamorphosis super art
+ *
+ * K7_blink_tbl and K7_last_tbl are blink steps { frames, display flag, colour mode, colour
+ * flip }, where a -1 entry jumps back: the first while the art is active, the second when the
+ * gauge is nearly spent. Read by EFFK7.C.
+ */
+
+#include "types.h"
+#include "structs.h"
+
+#pragma section TBL
+
+
+const s16 K7_blink_tbl[10][4] = {
+    { 20, 1, 17408, 1 },
+    { 15, 1, 17408, 0 },
+    { 10, 2, 17408, 0 },
+    { 40, 0, 17408, 0 },
+    { 6, 2, 17408, 0 },
+    { 10, 1, 17408, 0 },
+    { 12, 1, 17408, 1 },
+    { 10, 1, 17408, 0 },
+    { 6, 2, 17408, 0 },
+    { -1, 3, 16896, 0 },
+};
+
+const s16 K7_last_tbl[4][4] = {
+    { 10, 2, 17408, 0 },
+    { 15, 1, 17408, 0 },
+    { 20, 1, 17408, 1 },
+    { -1, 1, 16896, 0 },
+};

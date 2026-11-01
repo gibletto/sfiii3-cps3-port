@@ -1,0 +1,94 @@
+name: 3DS release
+
+# Builds the 3DS version and attaches the zip to the release. Run it by hand to build without a release, or
+# with a tag to (re)attach the zip to that release.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to attach the zip to (empty to only build)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-3ds-${{ github.event.release.tag_name || inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    container:
+      image: devkitpro/devkitarm:20260610@sha256:116afba8df8453961de2936ffab20dd441edf4d682856c1ec8b0e53d7ed0bbf5
+    outputs:
+      name: ${{ steps.package.outputs.name }}
+    steps:
+      - name: Install build tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends cmake ninja-build python3 zip git
+          test -f "$DEVKITPRO/portlibs/3ds/lib/libz.a" || { echo "3ds-zlib is missing from the image"; exit 1; }
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.release.tag_name || inputs.tag || github.ref }}
+
+      - name: Build
+        run: |
+          cmake -G Ninja -B build-3ds -DCMAKE_TOOLCHAIN_FILE=port/cmake/3ds-native.cmake -DDEVKITPRO="$DEVKITPRO"
+          ninja -C build-3ds sf3
+
+      - name: Package
+        id: package
+        env:
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          version="${TAG:-$(git rev-parse --short=7 HEAD)}"
+          name="sfiii3-3ds-$version"
+          dir="dist/$name"
+          mkdir -p "$dir/sd/3ds" "$dir/sd/sf3/rom-data" "$dir/tools"
+          cp build-3ds/sf3.3dsx "$dir/sd/3ds/"
+          touch "$dir/sd/sf3/rom-data/PUT bios.bin cg.bin user5.bin HERE.txt"
+          cp port/ctr/release/README.txt "$dir/"
+          cp port/tools/prepare_rom.py games/sf3/tools/cps3rom.py "$dir/tools/"
+          cp LICENSE "$dir/LICENSE.txt"
+          cp NOTICE.md "$dir/NOTICE.md"
+          (cd dist && zip -r -9 "$name.zip" "$name")
+          (cd dist && sha256sum "$name.zip" > "$name.zip.sha256")
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.package.outputs.name }}
+          path: |
+            dist/${{ steps.package.outputs.name }}.zip
+            dist/${{ steps.package.outputs.name }}.zip.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    needs: build
+    if: github.event_name == 'release' || inputs.tag != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.build.outputs.name }}
+          path: assets
+
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: gh release upload "$TAG" assets/* --clobber

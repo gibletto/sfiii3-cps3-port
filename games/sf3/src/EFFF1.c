@@ -1,0 +1,127 @@
+/*
+ * EFFF1.C  Effect F1: another-BG switch control
+ *
+ * Effect F1 is started from character move data (CHARMOVE.c) to switch a player's another-BG.
+ * effect_F1_move loads its type, duration and end conditions from effF1_data_tbl (mirrored with
+ * effF1_rl_type_tbl when the player faces left), sets another_bg[] for the player and clears it
+ * again when a condition is met: the timer runs out, the player's or opponent's state or move
+ * changes, the super art ends, dramatic-battle mode is on, or the player's shell is gone.
+ * effect_F1_init itself is an empty stub.
+ */
+
+#include "structs.h"
+#include "work.h"
+#include "romdata.h"
+#include "extern.h"
+#include "ta_sub.h"
+#include "CHARMOVE.h"
+#include "charmove_2.h"
+#include "EFFECT.h"
+#include "effect_2.h"
+#include "PLS02.h"
+#include "aboutspr.h"
+#include "EFFF1.h"
+
+/* routine_no[0] */
+#define R0_INIT         0       /* load the table and switch the BG */
+#define R0_MOVE         1       /* hold the BG until an end condition */
+#define R0_KILL         2       /* put the work back */
+
+
+
+void effect_F1_move(WORK_Other* ewk) {
+    PLW* mwk = (PLW*)ewk->my_master;
+    s32 rno;
+    switch (ewk->wu.routine_no[0]) {
+    case R0_INIT:
+        effF1_data_set(ewk, mwk);
+        another_bg[ewk->master_id] = ewk->wu.type;
+        ewk->wu.routine_no[0]++;
+        /* fall through */
+    case R0_MOVE:
+        if (ewk->wu.dead_f == 1) {
+            goto end;
+        }
+        if ((ewk->wu.dir_old & 1) && (--ewk->wu.direction == 0)) {
+            goto end;
+        }
+        if ((ewk->wu.dir_old & 2)) {
+            if (((ewk->wu.routine_no[5] != mwk->wu.routine_no[1]) ||
+                                      (ewk->wu.routine_no[6] != mwk->wu.routine_no[2]))) {
+                goto end;
+            }
+        }
+        if ((ewk->wu.dir_old & 4) && (mwk->sa->ok != -1)) {
+            goto end;
+        }
+        if (ewk->wu.dir_old & 8) {
+            rno = ((WORK*)mwk->wu.target_adrs)->routine_no[1];
+            if (rno != PLAYER_ATTACK && rno != PLAYER_CATCH) {
+                goto end;
+            }
+        }
+        if (ewk->wu.dir_old & 0x10) {
+            rno = mwk->wu.routine_no[1];
+            if (rno != PLAYER_ATTACK && rno != PLAYER_CATCH) {
+                goto end;
+            }
+        }
+        if ((ewk->wu.dir_old & 0x20) && (ewk->wu.total_att_set != ((WORK*)mwk->wu.target_adrs)->kind_of_waza)) {
+            goto end;
+        }
+        if ((ewk->wu.dir_old & 0x40) && (ewk->wu.total_paring != mwk->wu.kind_of_waza)) {
+            goto end;
+        }
+        if ((ewk->wu.dir_old & 0x80) && pcon_dp_flag) {
+            goto end;
+        }
+        if (ewk->wu.old_rno[2] && (ewk->wu.total_paring != mwk->wu.kind_of_waza) && (mwk->wu.shell_ix[0] == -1)) {
+            goto end;
+        }
+        if (another_bg[ewk->master_id] != ewk->wu.type) {
+            ewk->wu.routine_no[0]++;
+            break;
+        }
+        if (another_bg[ewk->master_id] == 0) {
+            ewk->wu.routine_no[0]++;
+        }
+        break;
+    end:
+        ewk->wu.routine_no[0]++;
+        another_bg[ewk->master_id] = 0;
+        break;
+    case R0_KILL:
+    default:
+        push_effect_work(&ewk->wu);
+        break;
+    }
+}
+
+
+
+/* provisional name */
+void effF1_data_set(WORK_Other* ewk, PLW* mwk) {
+    const s16* tbl = effF1_data_tbl[ewk->wu.type];
+    ewk->wu.dir_old = tbl[0];
+    ewk->wu.type = tbl[1];
+    ewk->wu.direction = tbl[2];
+    ewk->wu.old_rno[3] = tbl[3];
+    ewk->wu.old_rno[2] = tbl[4];
+    ewk->wu.routine_no[5] = mwk->wu.routine_no[1];
+    ewk->wu.routine_no[6] = mwk->wu.routine_no[2];
+    ewk->wu.total_paring = mwk->wu.kind_of_waza;
+    ewk->wu.total_att_set = ((WORK*)mwk->wu.target_adrs)->kind_of_waza;
+    if (mwk->wu.rl_flag) {
+        ewk->wu.type = effF1_rl_type_tbl[ewk->wu.type];
+    }
+}
+
+u32 effect_F1_init(wk, type)
+WORK* wk;
+u8 type;
+{
+    return 0;
+}
+
+
+

@@ -1,0 +1,44 @@
+/*
+ * EFFF2.C  ending falling objects of effect F2
+ *
+ * efff2_data_tbl1 gives the ten objects { family, home x, home y, priority }, efff2_sp_tbl1
+ * their falling speeds { x, y }, and efff2_timer_tbl the random waits before each falls. Read
+ * by EFFF2_CODE.C.
+ */
+
+#include "types.h"
+#include "structs.h"
+
+#pragma section TBL
+
+
+const s16 efff2_data_tbl1[10][4] = {
+    { 1, 384, 608, 80 },
+    { 2, 592, 496, 86 },
+    { 1, 640, 576, 80 },
+    { 2, 336, 584, 86 },
+    { 1, 464, 584, 80 },
+    { 1, 544, 640, 80 },
+    { 2, 640, 512, 86 },
+    { 1, 480, 592, 80 },
+    { 2, 416, 640, 86 },
+    { 1, 576, 576, 80 },
+};
+
+const s32 efff2_sp_tbl1[10][2] = {
+    { -0xC000, 0 },
+    { -0x1800, 0 },
+    { 0x2000, 0 },
+    { -0x2000, 0 },
+    { -0x2000, 0 },
+    { 0, 0 },
+    { 0x3000, 0 },
+    { -0x8000, 0 },
+    { -0x6000, 0 },
+    { 0x6000, 0 },
+};
+
+const s16 efff2_timer_tbl[16] = {
+    60, 0, 40, 90, 20, 10, 8, 130,
+    1, 34, 50, 70, 6, 80, 22, 100,
+};

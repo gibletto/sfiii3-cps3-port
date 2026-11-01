@@ -1,0 +1,25 @@
+/*
+ * EFF45_TBL.C  bg050 background cell animation tables
+ *
+ * eff45_cell_tbl lists the cells written into the two character blocks, and eff45_anm_tbl the
+ * four animation frames: block, y scroll and time. Read by EFF45.C, the bg050 background cell
+ * animation.
+ */
+
+#include "types.h"
+#include "structs.h"
+
+#pragma section TBL
+
+
+const EFF45_CELL_REQ eff45_cell_tbl[2][16] = {
+    { { 0, 1 }, { 0x40, 2 }, { 0x80, 3 }, { 0xC0, 4 }, { 0x1000, 5 }, { 0x1040, 6 }, { 0x1080, 7 }, { 0x10C0, 8 }, { 0x2000, 1 }, { 0x2040, 2 }, { 0x2080, 3 }, { 0x20C0, 4 }, { 0x3000, 0x11 }, { 0x3040, 0x12 }, { 0x3080, 0x13 }, { 0x30C0, 0x14 } },
+    { { 0, 1 }, { 0x40, 2 }, { 0x80, 3 }, { 0xC0, 4 }, { 0x1000, 0x15 }, { 0x1040, 0x16 }, { 0x1080, 0x17 }, { 0x10C0, 0x18 }, { 0x2000, 1 }, { 0x2040, 2 }, { 0x2080, 3 }, { 0x20C0, 4 }, { 0x3000, 0x19 }, { 0x3040, 0x1A }, { 0x3080, 0x1B }, { 0x30C0, 0x1C } },
+};
+
+const EFF45_FRAME eff45_anm_tbl[4] = {
+    { 0, 512, 12 },
+    { 0, 0, 12 },
+    { 1, 512, 12 },
+    { 1, 0, 12 },
+};

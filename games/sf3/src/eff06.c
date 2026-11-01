@@ -1,0 +1,122 @@
+/*
+ * EFF06.C  Stage scenery objects, set 06
+ *
+ * Second set of per-stage decorative sprites, identical in structure to EFF05 but driven
+ * from the scr_obj_num6/scr_obj_data6 tables and drawn with disp_pos_trans_entry_rs.
+ * effect_06_init creates one object per table entry for the current bg_w.bg_index;
+ * effect_06_move animates it until compel_dead_check retires it, then frees it.
+ * Called from every stage BG init routine alongside effect_05_init.
+ */
+
+#include "structs.h"
+#include "work.h"
+#include "romdata.h"
+#include "extern.h"
+#include "ta_sub.h"
+#include "EFFECT.h"
+#include "effect_2.h"
+#include "aboutspr.h"
+#include "CHARMOVE.h"
+#include "bg_sub.h"
+#include "bg_sub_2.h"
+#include "bg_sub_3.h"
+#include "bg_sub_4.h"
+#include "bg_sub_5.h"
+#include "eff06.h"
+
+/* routine_no[0] */
+#define R0_INIT         0       /* start the animation */
+#define R0_MOVE         1       /* draw until retired */
+#define R0_KILL         2       /* (default) put the work back */
+
+
+
+/* 02006B38 */
+const s16* scr_obj_data6[23] = {
+    st0000_data_tbl,
+    st0100_data_tbl,
+    st0200_data_tbl,
+    stg_dum_data_tbl,
+    st0400_data_tbl,
+    st0500_data_tbl,
+    stg_dum_data_tbl,
+    st0700_data_tbl,
+    st0800_data_tbl,
+    st0900_data_tbl,
+    st0A00_data_tbl,
+    st0B00_data_tbl,
+    st0c00_data_tbl,
+    st0100_data_tbl,
+    st0e00_data_tbl,
+    st0e00_data_tbl,
+    st1000_data_tbl,
+    st1100_data_tbl,
+    st0500_data_tbl,
+    st1300_data_tbl,
+    st1400_data_tbl,
+    stg_dum_data_tbl,
+    stg_dum_data_tbl,
+};
+
+
+void effect_06_move(WORK_Other* ewk) {
+    if (obr_no_disp_check()) {
+        return;
+    }
+    switch (ewk->wu.routine_no[0]) {
+    case R0_INIT:
+        ewk->wu.routine_no[0]++;
+        ewk->wu.disp_flag = 1;
+        set_char_move_init(&ewk->wu, 0, ewk->wu.char_index);
+        break;
+    case R0_MOVE:
+        if (compel_dead_check(ewk)) {
+            ewk->wu.routine_no[0]++;
+            break;
+        }
+        disp_pos_trans_entry_rs(ewk);
+        break;
+    default:
+        all_cgps_put_back(&ewk->wu);
+        push_effect_work(&ewk->wu);
+        break;
+    }
+}
+
+
+
+s32 effect_06_init(void) {
+    WORK_Other* ewk;
+    s16 ix;
+    s16 lp_cnt = scr_obj_num6[bg_w.bg_index];
+    s16 i;
+    const s16* data_ptr;
+    if (lp_cnt == 0) {
+        return;
+    }
+    data_ptr = scr_obj_data6[bg_w.bg_index];
+    for (i = 0; i < lp_cnt; i++) {
+        if ((ix = pull_effect_work(4)) == -1) {
+            return -1;
+        }
+        ewk = (WORK_Other*)frw[ix];
+        ewk->wu.be_flag = 1;
+        ewk->wu.id = 6;
+        ewk->wu.work_id = 16;
+        ewk->wu.cgromtype = 1;
+        ewk->wu.rl_flag = 0;
+        ewk->wu.my_col_mode = 0x4200;
+        ewk->wu.char_table[0] = char_add[bg_w.bg_index];
+        ewk->wu.type = i;
+        ewk->wu.dead_f = *data_ptr++;
+        ewk->wu.my_family = *data_ptr++;
+        ewk->wu.my_col_code = *data_ptr++;
+        ewk->wu.xyz[0].disp.pos = *data_ptr++;
+        ewk->wu.xyz[1].disp.pos = *data_ptr++;
+        ewk->wu.my_priority = ewk->wu.position_z = *data_ptr++;
+        ewk->wu.char_index = *data_ptr++;
+        ewk->wu.sync_suzi = *data_ptr++;
+        suzi_offset_set(&ewk->wu);
+    }
+    return 0;
+}

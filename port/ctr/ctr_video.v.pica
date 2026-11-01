@@ -1,0 +1,16 @@
+; ctr_video.v.pica  Vertex shader: passes each quad record to the geometry shader
+
+.out o_rect position
+.out o_tc texcoord0
+.out o_z texcoord1
+
+.alias inrect v0            ; (x0, y0, x1, y1)
+.alias intc v1              ; (u0, v0, u1, v1)
+.alias inz v2               ; x: z order; w: 3D depth
+
+.proc main
+    mov o_rect, inrect
+    mov o_tc, intc
+    mov o_z, inz
+    end
+.end

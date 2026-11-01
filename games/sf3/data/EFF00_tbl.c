@@ -1,0 +1,22 @@
+/*
+ * EFF00_TBL.C  judgement box display settings
+ *
+ * For each extra DIP switch setting, jdb gives the set of judgement boxes to draw and jdb2 the
+ * cell setting of the display. Read by EFF00.C, the judgement box display.
+ */
+
+#include "types.h"
+#include "structs.h"
+
+#pragma section TBL
+
+
+const u16 jdb[16] = {
+    0x8000, 0x80FF, 0xBC00, 0xBCFF, 0x8300, 0x83FF, 0xBF00, 0xBFFF,
+    0xC000, 0xC0FF, 0xFC00, 0xFCFF, 0xC300, 0xC3FF, 0xFF00, 0xFFFF,
+};
+
+const u16 jdb2[16] = {
+    2, 0x22, 0x12, 0x32, 0xA, 0x2A, 0x1A, 0x3A,
+    6, 0x26, 0x16, 0x36, 0xE, 0x2E, 0x1E, 0x3E,
+};

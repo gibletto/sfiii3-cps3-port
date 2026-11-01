@@ -1,0 +1,167 @@
+/*
+ * EFFM3.C  Effect M3: zooming grade letter on the result screen
+ *
+ * Effect M3 is created by the EFFL1 grade plate (effect_M3_init, at the end of this file) once per
+ * grade letter; it creates a sprite at one conn entry of a connected effect, 40 dots lower.
+ * effect_M3_move waits for Next_Step, then shrinks the letter from a large size to normal using
+ * the M3_bahn_data speed and damping values; when the first letter lands it clears Next_Step and
+ * calls the follow-up routine. effM3_trans places the letter on its BG family and draws it.
+ */
+
+#include "structs.h"
+#include "work.h"
+#include "romdata.h"
+#include "extern.h"
+#include "PLS02.h"
+#include "aboutspr.h"
+#include "EFFECT.h"
+#include "effect_2.h"
+#include "EffM3.h"
+#include "end_sub.h"
+#include "end_sub_2.h"
+#include "end_sub_3.h"
+#include "end_sub_4.h"
+#include "end_sub_5.h"
+#include "end_sub_6.h"
+#include "end_sub_7.h"
+#include "color3rd.h"
+#include "end_sub_8.h"
+#include "EFFM7.h"
+#include "ta_sub.h"
+#include "CALDIR.h"
+#include "CHARMOVE.h"
+#include "charmove_2.h"
+#include "textsound.h"
+#include "textsound_2.h"
+#include "textsound_3.h"
+#include "SE.h"
+#include "se_2.h"
+#include "se_3.h"
+#include "bg_sub.h"
+#include "bg_sub_2.h"
+#include "bg_sub_3.h"
+#include "bg_sub_4.h"
+#include "bg_sub_5.h"
+#include "effM5.h"
+
+/* routine_no[0] */
+#define R0_INIT         0       /* set up the zoom */
+#define R0_MOVE         1       /* zoom the letter in */
+#define R0_END          2       /* hidden for a frame */
+#define R0_KILL         3       /* (default) put the work back */
+
+/* routine_no[1] */
+#define R1_WAIT         0       /* wait for the next-step cue */
+#define R1_DELAY        1       /* count the delay, then show */
+#define R1_ZOOM         2       /* shrink to normal size */
+
+
+
+void effect_M3_move(WORK_Other* ewk) {
+    switch (ewk->wu.routine_no[0]) {
+    case R0_INIT:
+        ewk->wu.routine_no[0] = R0_MOVE;
+        ewk->wu.disp_flag = 0;
+        ewk->wu.my_col_mode = 0x4200;
+        ewk->wu.my_col_code = 64;
+        ewk->wu.my_family = 3;
+        ewk->wu.position_z = 60 - (ewk->wu.type + 2);
+        ewk->wu.dmcal_m = M3_bahn_data[0];
+        ewk->wu.dmcal_d = M3_bahn_data[1];
+        ewk->wu.dir_timer = M3_bahn_data[2];
+        ewk->wu.old_cgnum = 0;
+        break;
+    case R0_MOVE:
+        if (ewk->wu.dead_f == 1 || Suicide[2] != 0) {
+            ewk->wu.disp_flag = 0;
+            ewk->wu.type = 0;
+            ewk->wu.routine_no[0] = R0_END;
+            break;
+        }
+        switch (ewk->wu.routine_no[1]) {
+        case R1_WAIT:
+            if (!(Next_Step & 1)) {
+                break;
+            }
+            ewk->wu.routine_no[1]++;
+            ewk->wu.mvxy.a[0].real.h = 64;
+            ewk->wu.mvxy.a[0].real.l = -1;
+            ewk->wu.mvxy.d[0].real.h = -1;
+            ewk->wu.mvxy.d[0].real.l = M3_bahn_data[4] * 16;
+            ewk->wu.mvxy.kop[0] = 1;
+            ewk->wu.my_mr_flag = 1;
+            /* fall through */
+        case R1_DELAY:
+            if (--ewk->wu.dir_timer >= 0) {
+                break;
+            }
+            ewk->wu.routine_no[1]++;
+            ewk->wu.disp_flag = 1;
+            /* fall through */
+        case R1_ZOOM:
+            cal_mvxy_speed(&ewk->wu);
+            ewk->wu.mvxy.d[0].sp = (ewk->wu.mvxy.d[0].sp * ewk->wu.dmcal_m) / ewk->wu.dmcal_d;
+            if (ewk->wu.mvxy.a[0].real.h) {
+                break;
+            }
+            ewk->wu.routine_no[1]++;
+            if (ewk->wu.type == 0) {
+                Next_Step = 0;
+                effinitjp_quake_y[0](ewk, (u8)M3_bahn_data[3]);
+            }
+            break;
+        default:
+            ewk->wu.disp_flag = 0;
+            ewk->wu.type = 0;
+            ewk->wu.routine_no[0] = R0_END;
+            break;
+        }
+        ewk->wu.my_mts = ewk->wu.mvxy.a[0].real.h + 63;
+        ewk->wu.my_mr.size.x = ewk->wu.my_mr.size.y = ewk->wu.my_mts;
+        effM3_trans(&ewk->wu);
+        break;
+    case R0_END:
+        ewk->wu.routine_no[0] = R0_KILL;
+        break;
+    default:
+        all_cgps_put_back(&ewk->wu);
+        push_effect_work(&ewk->wu);
+        break;
+    }
+}
+
+
+
+void effM3_trans(WORK* ewk) {
+    ewk->position_x = bg_w.bgw[ewk->my_family - 1].wxy[0].disp.pos;
+    ewk->position_y = bg_w.bgw[ewk->my_family - 1].wxy[1].disp.pos;
+    ewk->position_x += ewk->xyz[0].disp.pos;
+    ewk->position_y += ewk->xyz[1].disp.pos;
+    sort_push_request4(ewk);
+}
+
+
+
+s32 effect_M3_init(wk, num)
+WORK_Other_CONN* wk;
+s16 num;
+{
+    WORK_Other* ewk;
+    s16 ix;
+    if ((ix = pull_effect_work(4)) == -1) {
+        return -1;
+    }
+    ewk = (WORK_Other*)frw[ix];
+    ewk->wu.be_flag = 1;
+    ewk->wu.id = 223;
+    ewk->wu.work_id = 16;
+    ewk->wu.cgromtype = 1;
+    ewk->wu.type = num;
+    ewk->wu.xyz[0].disp.pos = wk->conn[num].nx;
+    ewk->wu.xyz[1].disp.pos = wk->conn[num].ny + 40;
+    ewk->wu.cg_number = wk->conn[num].chr;
+    return 0;
+}
+
+
+

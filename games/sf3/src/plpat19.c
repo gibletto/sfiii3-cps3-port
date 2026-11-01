@@ -1,0 +1,526 @@
+/*
+ * plpat19.c  Character 19 (Twelve) special attack routines
+ *
+ * The entry routine pl19_extra_attack runs the routine for attack numbers 16 and up
+ * (routine_no[2]) through pl19_exatt_table; each routine is a small state machine on
+ * routine_no[3] that starts the animation and then follows its cg_type markers to apply motion
+ * data, effects and gauge changes.
+ * Att_METAMORPHOSE starts the metamorphosis (effect K7), Att_SA__D_R_A and
+ * Att_EX__D_R_A are the super art and EX versions of the D.R.A. move, Att_KUUCHUUHISSATU and
+ * Att_AIR_A_X_E are air specials, Att_AIRDASH is the air dash that wraps round at the screen wall
+ * (kabe_check2/3), and Att_pl19_TOKUSHUKOUDOU is the personal action. get_lever_dir reads the
+ * lever direction for steering.
+ */
+
+#include "structs.h"
+#include "work.h"
+#include "romdata.h"
+#include "extern.h"
+#include "PLS02.h"
+#include "PLSGAUGE.h"
+#include "CALDIR.h"
+#include "CHARMOVE.h"
+#include "charmove_2.h"
+#include "EFFI3.h"
+#include "EFFK7.h"
+#include "EFFL0.h"
+#include "bg_sub.h"
+#include "bg_sub_2.h"
+#include "bg_sub_3.h"
+#include "bg_sub_4.h"
+#include "bg_sub_5.h"
+#include "Grade.h"
+#include "PLPAT.h"
+#include "PLS01.h"
+#include "plpat19.h"
+
+/* routine_no[3], Att_METAMORPHOSE */
+#define METAMORPHOSE_CUE 1      /* run the animation to cue 20 */
+#define METAMORPHOSE_RUN 9      /* run the animation */
+
+/* routine_no[3], Att_SA__D_R_A */
+#define SA_D_R_A_CUE    1       /* run the animation to cue 20 */
+#define SA_D_R_A_AIR    2       /* in the air until it lands */
+#define SA_D_R_A_AIR2   3       /* in the air until it lands */
+#define SA_D_R_A_AIR3   4       /* in the air until it lands */
+#define SA_D_R_A_LAND   5       /* the landing */
+
+/* routine_no[3], Att_EX__D_R_A */
+#define EX_D_R_A_MOVE   1       /* move and run the animation to cue 20 */
+#define EX_D_R_A_AIR    2       /* in the air until it lands */
+#define EX_D_R_A_END    3       /* run the animation to its end */
+
+/* routine_no[3], Att_KUUCHUUHISSATU */
+#define KUUCHUUHISSATU_AIR 1    /* in the air until it lands */
+#define KUUCHUUHISSATU_END 2    /* run the animation to its end */
+
+/* routine_no[3], Att_AIRDASH */
+#define AIRDASH_MOVE    1       /* move and run the animation */
+#define AIRDASH_AIR     3       /* in the air until it lands */
+#define AIRDASH_LAND    4       /* the landing */
+#define AIRDASH_END     5       /* run the animation to its end */
+#define AIRDASH_STOP    6       /* stop moving */
+
+/* routine_no[3], Att_pl19_TOKUSHUKOUDOU */
+#define TOKUSHUKOUDOU_ACTION 1  /* the personal action, filling the super art gauge */
+#define TOKUSHUKOUDOU_RUN 2     /* run the animation */
+
+/* routine_no[3], Att_AIR_A_X_E */
+#define AIR_A_X_E_CUE   1       /* run the animation to cue 1 */
+#define AIR_A_X_E_MOVE  2       /* move and run the animation */
+#define AIR_A_X_E_RUN   3       /* run the animation */
+
+
+void pl19_extra_attack(PLW* wk) {
+    pl19_exatt_table[wk->wu.routine_no[2] - ATTACK_SPECIAL](wk);
+}
+
+
+
+void Att_METAMORPHOSE(PLW* wk) {
+    switch (wk->wu.routine_no[3]) {
+    case RN3_START:
+        wk->wu.routine_no[3]++;
+        wk->wu.rl_flag = wk->wu.rl_waza;
+        hoken_muriyari_chakuchi(wk);
+        reset_mvxy_data(&wk->wu);
+        wk->metamorphose = 0;
+        wk->metamor_over = 0;
+        if (Bonus_Game_Flag == BONUS_CAR) {
+            goto alt;
+        }
+        if (effect_K7_init(wk) != -1) {
+            set_char_move_init(&wk->wu, 5, wk->as->char_ix);
+            break;
+        }
+    alt:
+        set_char_move_init(&wk->wu, 5, wk->as->char_ix + 2);
+        wk->wu.routine_no[3] = METAMORPHOSE_RUN;
+        break;
+    case METAMORPHOSE_CUE:
+        char_move(&wk->wu);
+        if (wk->wu.cg_type == 20) {
+            wk->wu.routine_no[2] = ATTACK_METAMOR_WAIT;
+            wk->wu.routine_no[3] = METAMORPHOSE_CUE;
+        }
+        break;
+    case METAMORPHOSE_RUN:
+        char_move(&wk->wu);
+        break;
+    }
+}
+
+
+
+void Att_SA__D_R_A(PLW* wk) {
+    PLW* emwk;
+    switch (wk->wu.routine_no[3]) {
+    case RN3_START:
+        wk->wu.routine_no[3]++;
+        set_char_move_init(&wk->wu, 5, wk->as->char_ix);
+        wk->wu.mvxy.index = wk->as->r_no;
+        break;
+    case SA_D_R_A_CUE:
+        char_move(&wk->wu);
+        if (wk->wu.cg_type == 20) {
+            setup_mvxy_data(&wk->wu, wk->wu.mvxy.index);
+            wk->wu.cg_type = 0;
+            wk->wu.routine_no[3]++;
+        }
+        break;
+    case SA_D_R_A_AIR:
+        jumping_union_process(&wk->wu, 3);
+        if ((wk->wu.routine_no[3] != SA_D_R_A_AIR2) && (wk->wu.cg_type == 20)) {
+            setup_mvxy_data(&wk->wu, wk->wu.mvxy.index);
+            wk->wu.mvxy.index++;
+            wk->wu.cg_type = 0;
+        }
+        if (wk->wu.routine_no[3] == SA_D_R_A_AIR2) {
+            if (wk->wu.mvxy.kop[0] == 2) {
+                wk->wu.mvxy.kop[0] = 1;
+            }
+            wk->wu.mvxy.d[1].sp = 0;
+            wk->wu.mvxy.a[1].sp = 0;
+        }
+        break;
+    case SA_D_R_A_AIR2:
+        char_move(&wk->wu);
+        add_mvxy_speed(&wk->wu);
+        cal_mvxy_speed(&wk->wu);
+        if (wk->wu.cg_type == 20) {
+            setup_mvxy_data(&wk->wu, wk->wu.mvxy.index);
+            wk->wu.mvxy.index++;
+            wk->wu.cg_type = 0;
+        }
+        if (wk->wu.cg_type == 21) {
+            reset_mvxy_data(&wk->wu);
+            wk->wu.routine_no[3] = SA_D_R_A_LAND;
+            wk->wu.cg_type = 0;
+        }
+        if (wk->wu.cg_type == 30) {
+            wk->wu.cg_type = 0;
+            wk->wu.routine_no[3]++;
+            setup_mvxy_data(&wk->wu, wk->wu.mvxy.index);
+            wk->wu.mvxy.index++;
+            emwk = (PLW*)wk->wu.target_adrs;
+            wk->wu.xyz[0].disp.pos = emwk->wu.xyz[0].disp.pos;
+            wk->wu.xyz[1].disp.pos = emwk->wu.xyz[1].disp.pos + -224;
+            if (wk->wu.xyz[1].disp.pos < 0) {
+                wk->wu.xyz[1].disp.pos = 0;
+            }
+        }
+        if ((wk->wu.cg_type == 64) || (wk->wu.cg_type == 0xFF)) {
+            wk->wu.routine_no[3] = SA_D_R_A_LAND;
+            wk->wu.mvxy.d[0].sp = 0;
+            wk->wu.mvxy.a[0].sp = 0;
+        }
+        break;
+    case SA_D_R_A_AIR3:
+        jumping_union_process(&wk->wu, 5);
+        if ((wk->wu.routine_no[3] != SA_D_R_A_LAND) && (wk->wu.cg_type == 20)) {
+            setup_mvxy_data(&wk->wu, wk->wu.mvxy.index);
+            wk->wu.mvxy.index++;
+            wk->wu.cg_type = 0;
+        }
+        if (wk->wu.routine_no[3] == SA_D_R_A_LAND) {
+            if (wk->wu.mvxy.kop[0] == 2) {
+                wk->wu.mvxy.kop[0] = 1;
+            }
+            wk->wu.mvxy.d[1].sp = 0;
+            wk->wu.mvxy.a[1].sp = 0;
+        }
+        break;
+    case SA_D_R_A_LAND:
+        char_move(&wk->wu);
+        break;
+    default:
+        char_move(&wk->wu);
+    }
+}
+
+
+
+void Att_EX__D_R_A(PLW* wk) {
+    PLW* twk;
+    s16 ex;
+    s16 ey;
+    switch (wk->wu.routine_no[3]) {
+    case RN3_START:
+        wk->wu.routine_no[3]++;
+        wk->wu.rl_flag = wk->wu.rl_waza;
+        set_char_move_init(&wk->wu, 5, wk->as->char_ix);
+        setup_mvxy_data(&wk->wu, wk->as->r_no);
+        twk = (PLW*)wk->wu.target_adrs;
+        if (wk->wu.rl_flag) {
+            ex = twk->wu.position_x - dra_em_tall[twk->player_number][0];
+        } else {
+            ex = twk->wu.position_x + dra_em_tall[twk->player_number][0];
+        }
+        ey = dra_em_tall[twk->player_number][1];
+        wk->wu.mvxy.a[0].sp = 0;
+        cal_delta_speed(&wk->wu, 8, ex, ey, 2, 2);
+        if (wk->wu.rl_flag == 0) {
+            wk->wu.mvxy.a[0].sp = -wk->wu.mvxy.a[0].sp;
+            wk->wu.mvxy.d[0].sp = -wk->wu.mvxy.d[0].sp;
+        }
+        break;
+    case EX_D_R_A_MOVE:
+        char_move(&wk->wu);
+        if (wk->wu.cg_type == 20) {
+            wk->wu.routine_no[3]++;
+            wk->wu.cg_type = 0;
+            add_mvxy_speed(&wk->wu);
+            wk->wu.mvxy.kop[1] = 2;
+        }
+        break;
+    case EX_D_R_A_AIR:
+        jumping_union_process(&wk->wu, 3);
+        if ((wk->wu.routine_no[3] != EX_D_R_A_END) && (wk->wu.cg_type == 20)) {
+            setup_mvxy_data(&wk->wu, wk->wu.mvxy.index);
+            wk->wu.mvxy.index++;
+            wk->wu.cg_type = 0;
+        }
+        if (wk->wu.routine_no[3] == EX_D_R_A_END) {
+            if (wk->wu.mvxy.kop[0] == 2) {
+                wk->wu.mvxy.kop[0] = 1;
+            }
+            wk->wu.mvxy.d[1].sp = 0;
+            wk->wu.mvxy.a[1].sp = 0;
+        }
+        break;
+    case EX_D_R_A_END:
+        char_move(&wk->wu);
+        add_mvxy_speed(&wk->wu);
+        cal_mvxy_speed(&wk->wu);
+        if (wk->wu.cg_type == 20) {
+            setup_mvxy_data(&wk->wu, wk->wu.mvxy.index);
+            wk->wu.mvxy.index++;
+            wk->wu.cg_type = 0;
+        }
+        if (wk->wu.cg_type == 64 || wk->wu.cg_type == 0xFF) {
+            wk->wu.routine_no[3]++;
+            wk->wu.mvxy.d[0].sp = 0;
+            wk->wu.mvxy.a[0].sp = 0;
+        }
+        break;
+    default:
+        char_move(&wk->wu);
+        break;
+    }
+}
+
+
+
+void Att_KUUCHUUHISSATU(PLW* wk) {
+    switch (wk->wu.routine_no[3]) {
+    case RN3_START:
+        wk->wu.routine_no[3]++;
+        set_char_move_init(&wk->wu, 5, wk->as->char_ix);
+        setup_mvxy_data(&wk->wu, wk->as->r_no);
+        /* fall through */
+    case KUUCHUUHISSATU_AIR:
+        jumping_union_process(&wk->wu, 2);
+        if ((wk->wu.routine_no[3] != KUUCHUUHISSATU_END) && (wk->wu.cg_type == 20)) {
+            setup_mvxy_data(&wk->wu, wk->wu.mvxy.index);
+            wk->wu.mvxy.index++;
+            wk->wu.cg_type = 0;
+        }
+        if (wk->wu.routine_no[3] == KUUCHUUHISSATU_END) {
+            if (wk->wu.mvxy.kop[0] == 2) {
+                wk->wu.mvxy.kop[0] = 1;
+            }
+            wk->wu.mvxy.d[1].sp = 0;
+            wk->wu.mvxy.a[1].sp = 0;
+        }
+        break;
+    case KUUCHUUHISSATU_END:
+        char_move(&wk->wu);
+        add_mvxy_speed(&wk->wu);
+        cal_mvxy_speed(&wk->wu);
+        if (wk->wu.cg_type == 20) {
+            setup_mvxy_data(&wk->wu, wk->wu.mvxy.index);
+            wk->wu.mvxy.index++;
+            wk->wu.cg_type = 0;
+        }
+        if (wk->wu.cg_type == 21) {
+            reset_mvxy_data(&wk->wu);
+            wk->wu.routine_no[3]++;
+            wk->wu.cg_type = 0;
+        }
+        if (wk->wu.cg_type == 64 || wk->wu.cg_type == 0xFF) {
+            wk->wu.routine_no[3]++;
+            wk->wu.mvxy.d[0].sp = 0;
+            wk->wu.mvxy.a[0].sp = 0;
+        }
+        break;
+    default:
+        char_move(&wk->wu);
+        break;
+    }
+}
+
+
+
+void Att_AIRDASH(PLW* wk) {
+    switch (wk->wu.routine_no[3]) {
+    case RN3_START:
+        wk->wu.routine_no[3]++;
+        wk->wu.rl_flag = wk->wu.rl_waza;
+        set_char_move_init(&wk->wu, 5, wk->as->char_ix);
+        reset_mvxy_data(&wk->wu);
+        wk->wu.mvxy.index = wk->as->r_no;
+        break;
+    case AIRDASH_MOVE:
+        char_move(&wk->wu);
+        if (kabe_check3(wk) != 0) {
+            wk->wu.rl_flag = (wk->wu.rl_flag + 1) & 1;
+            wk->wu.xyz[0].disp.pos = wk->wu.rl_flag ? bg_w.bgw[1].l_limit2 - 192 : bg_w.bgw[1].r_limit2 + 192;
+            set_char_move_init(&wk->wu, 5, 65);
+            wk->wu.routine_no[3] = AIRDASH_END;
+            wk->wu.cg_type = 0;
+            effect_I3_init(&wk->wu, 4);
+            break;
+        }
+        add_mvxy_speed(&wk->wu);
+        cal_mvxy_speed(&wk->wu);
+        switch (wk->wu.cg_type) {
+        case 20:
+            setup_mvxy_data(&wk->wu, wk->wu.mvxy.index);
+            wk->wu.mvxy.index++;
+            wk->wu.cg_type = 0;
+            break;
+        case 25:
+            add_to_mvxy_data(&wk->wu, wk->wu.mvxy.index);
+            wk->wu.mvxy.index++;
+            wk->wu.cg_type = 0;
+            break;
+        case 30:
+            setup_mvxy_data(&wk->wu, wk->as->data_ix);
+            wk->wu.routine_no[3] = AIRDASH_AIR;
+            wk->wu.cg_type = 0;
+        }
+        return;
+    case AIRDASH_AIR:
+        jumping_union_process(&wk->wu, 4);
+        if (!kabe_check3(wk)) {
+            break;
+        }
+        wk->wu.rl_flag = wk->wu.rl_flag + 1 & 1;
+        wk->wu.xyz[0].disp.pos = wk->wu.rl_flag ? bg_w.bgw[1].l_limit2 - 192 : bg_w.bgw[1].r_limit2 + 192;
+        set_char_move_init(&wk->wu, 5, 65);
+        wk->wu.routine_no[3] = AIRDASH_END;
+        wk->wu.cg_type = 0;
+        effect_I3_init(&wk->wu, 4);
+        break;
+    case AIRDASH_LAND:
+        char_move(&wk->wu);
+        return;
+    case AIRDASH_END:
+        char_move(&wk->wu);
+        if (wk->wu.cg_type == 0xFF) {
+            wk->wu.cg_type = 0;
+            wk->wu.routine_no[3]++;
+        }
+        break;
+    case AIRDASH_STOP:
+        wk->wu.routine_no[3] = AIRDASH_MOVE;
+        char_move_cmj4(&wk->wu);
+        reset_mvxy_data(&wk->wu);
+        wk->wu.mvxy.index = wk->as->r_no;
+        break;
+    }
+}
+
+
+
+/* provisional name */
+s32 kabe_check2(PLW* wk) {
+    s16 tar_pos;
+    if (get_lever_dir(wk) != LVDIR_FORWARD) {
+        return 0;
+    }
+    if (wk->wu.xyz[1].disp.pos <= 32) {
+        return 0;
+    }
+    tar_pos = get_center_position();
+    if (wk->wu.rl_flag) {
+        tar_pos += 160;
+        if (wk->wu.xyz[0].disp.pos >= tar_pos) {
+            wk->wu.xyz[0].disp.pos = tar_pos;
+            return 1;
+        }
+        return 0;
+    }
+    tar_pos -= 160;
+    if (!(wk->wu.xyz[0].disp.pos > tar_pos)) {
+        wk->wu.xyz[0].disp.pos = tar_pos;
+        return 1;
+    }
+    return 0;
+}
+
+
+
+s32 kabe_check3(PLW* wk) {
+    if (get_lever_dir(wk) != LVDIR_FORWARD) {
+        return 0;
+    }
+    if (wk->wu.xyz[1].disp.pos <= 32) {
+        return 0;
+    }
+    return wk->wu.rl_flag + wk->micchaku_flag == 2;
+}
+
+
+
+void Att_pl19_TOKUSHUKOUDOU(PLW* wk) {
+    switch (wk->wu.routine_no[3]) {
+    case RN3_START:
+        wk->wu.routine_no[3]++;
+        wk->wu.rl_flag = wk->wu.rl_waza;
+        hoken_muriyari_chakuchi(wk);
+        if (wk->sa->ok == -1) {
+            wk->wu.routine_no[3] = TOKUSHUKOUDOU_RUN;
+            set_char_move_init((WORK*)wk, 5, 62);
+        } else if (wk->wu.disp_flag != 1 || wk->wu.my_col_mode != 0x4200) {
+            wk->wu.routine_no[3] = TOKUSHUKOUDOU_RUN;
+            set_char_move_init((WORK*)wk, 5, 64);
+        } else {
+            set_char_move_init((WORK*)wk, 5, 63);
+        }
+        break;
+    case TOKUSHUKOUDOU_ACTION:
+        char_move((WORK*)wk);
+        switch (wk->wu.cg_type) {
+        case 40:
+            wk->wu.cg_type = 0;
+            add_sp_arts_gauge_tokushu(wk);
+            return;
+        case 0xFF:
+            grade_add_personal_action(wk->wu.id);
+            effect_L0_init((WORK*)wk, 180);
+            return;
+        }
+        return;
+    case TOKUSHUKOUDOU_RUN:
+        char_move((WORK*)wk);
+        break;
+    }
+}
+
+
+
+void Att_AIR_A_X_E(PLW* wk) {
+    switch (wk->wu.routine_no[3]) {
+    case RN3_START:
+        wk->wu.routine_no[3]++;
+        set_char_move_init(&wk->wu, 5, wk->as->char_ix);
+        wk->wu.mvxy.index = wk->as->r_no;
+        break;
+    case AIR_A_X_E_CUE:
+        char_move(&wk->wu);
+        if (wk->wu.cg_type == 1) {
+            wk->wu.routine_no[3]++;
+        }
+        if (wk->wu.cg_type == 20) {
+            setup_mvxy_data(&wk->wu, wk->wu.mvxy.index);
+            wk->wu.cg_type = 0;
+            wk->wu.mvxy.index++;
+        }
+        break;
+    case AIR_A_X_E_MOVE:
+        jumping_union_process(&wk->wu, 3);
+        if (wk->wu.routine_no[3] == AIR_A_X_E_RUN) {
+            break;
+        }
+        if (wk->wu.cg_type == 20) {
+            add_to_mvxy_data(&wk->wu, wk->wu.mvxy.index);
+            wk->wu.cg_type = 0;
+            wk->wu.mvxy.index++;
+        }
+        if (wk->wu.cg_type == 30) {
+            setup_mvxy_data(&wk->wu, wk->as->data_ix);
+            wk->wu.cg_type = 0;
+        }
+        break;
+    case AIR_A_X_E_RUN:
+        char_move(&wk->wu);
+        break;
+    }
+}
+
+
+
+s32 get_lever_dir(PLW* wk) {
+    u8 num;
+    if (wk->wu.work_id == 1) {
+        if (wk->py->flag == 0) {
+            num = wcp[wk->wu.id].lever_dir;
+        } else {
+            num = 0;
+        }
+    } else {
+        num = wcp[((WORK_Other*)wk)->master_id & 1].lever_dir;
+    }
+    return num;
+}

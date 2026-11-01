@@ -1,0 +1,865 @@
+/*
+ * SYS_SUB.C  System subroutines for scenes and screens
+ *
+ * General helpers used by the scene and menu code, and cpu_algorithm, which returns the next
+ * lever/button word of a recorded demonstration input (Demo_Ptr) for PLMAIN. System_all_clear_Ex
+ * empties the effect lists. Request_Fade/Check_Fade_Complete(_SP) run fades;
+ * Switch_Screen_Init(_Panel), Switch_Screen and Switch_Screen_Revival run the screen wipes built from
+ * the patterns in SE. scfont_page0_fill / scfont_page1_fill fill a whole page of the text (SS) layer.
+ * Ranking entry insertion (insert_ranking_*, Check_Grade_Score, Check_CPU_Grade_Score) and
+ * Setup_Play_Type are here, with scene-cut helpers (Button_Cut_Hold, Button_Cut_EX,
+ * Cut_Cut_Cut and friends) that let a player's button shorten a scene.
+ * Disp_Digit8x16/16x24 draw score digits, Disp_Win_Type the round win marks, and
+ * Disp_Copyright the copyright lines chosen by Country.
+ */
+
+#include "structs.h"
+#include "work.h"
+#include "romdata.h"
+#include "extern.h"
+#include "aboutspr.h"
+#include "SE.h"
+#include "se_2.h"
+#include "se_3.h"
+#include "end_sub.h"
+#include "end_sub_2.h"
+#include "end_sub_3.h"
+#include "end_sub_4.h"
+#include "end_sub_5.h"
+#include "end_sub_6.h"
+#include "end_sub_7.h"
+#include "color3rd.h"
+#include "end_sub_8.h"
+#include "sc_trans.h"
+#include "EFFECT.h"
+#include "effect_2.h"
+#include "effd2.h"
+#include "effd3.h"
+#include "sys_test.h"
+#include "sys_test_2.h"
+#include "sys_test_2b.h"
+#include "sys_test_2c.h"
+#include "sys_test_3.h"
+#include "sys_test_4.h"
+#include "sys_test_5.h"
+#include "fifo.h"
+#include "sc_sub.h"
+#include "sc_sub_2.h"
+#include "sys_config.h"
+#include "sys_config_2.h"
+#include "sys_config_3.h"
+#include "n_input.h"
+#include "textsound.h"
+#include "textsound_2.h"
+#include "textsound_3.h"
+#include "SYS_sub.h"
+#include "cps3.h"
+
+
+
+/* Clears the text layer and runs System_all_clear, then waits a frame. */
+/* provisional name */
+void Scr_all_clear_Wait(void) {
+    tilemap_fill_all(0, 0x20);
+    System_all_clear();
+    task_sleep(1);
+}
+
+/* Runs System_all_clear, then waits a frame. */
+/* provisional name */
+void System_all_clear_Wait(void) {
+    System_all_clear();
+    task_sleep(1);
+}
+
+/* Clears text page 0 and runs System_all_clear_Ex, then waits a frame. */
+/* provisional name */
+void System_all_clear_Ex_Wait(void) {
+    scfont_page0_fill(0, 0x20);
+    System_all_clear_Ex();
+    task_sleep(1);
+}
+
+/* Clears the render lists, character graphics tables, scroll layer state and all effect work, then reloads the
+   common character graphics and cells. */
+/* provisional name */
+void System_all_clear(void) {
+    init_render_lists();
+    init_char_gfx_tables();
+    clear_scroll_layer_state_and_mask();
+    Family_Init();
+    effect_work_quick_clear();
+    load_char_gfx(0x9000, 1);
+    setup_kage_cells();
+    setup_hit_mark_cells();
+    setup_GILL_exsa_obj();
+}
+
+
+
+/* As System_all_clear, but clears only effect lists 2 to 7. */
+/* provisional name */
+void System_all_clear_Ex(void) {
+    s16 i;
+    init_render_lists();
+    init_char_gfx_tables();
+    clear_scroll_layer_state_and_mask();
+    Family_Init();
+    for (i = 2; i <= 7; i++) {
+        effect_work_list_init(i, -1);
+    }
+    load_char_gfx(0x9000, 1);
+    setup_kage_cells();
+    setup_hit_mark_cells();
+    setup_GILL_exsa_obj();
+}
+
+/* Runs the palette fade for a frame (fade_cont_main). */
+/* provisional name */
+void Fade_Cont(void) {
+    fade_cont_main();
+}
+
+
+
+/* Run the fade for a frame; 1 once it has finished. */
+s32 Check_Fade_Complete_SP(void) {
+    fade_cont_main();
+    return Fade_Flag ^ 1;
+}
+
+
+
+/* Run the fade; once it has finished, count down Fade_Gap_Timer (3 from Request_Fade) and return 1
+   when it runs out. */
+s32 Check_Fade_Complete(void) {
+    if (Fade_Flag) {
+        fade_cont_main();
+        return 0;
+    }
+    if (Fade_Gap_Timer == 3) {
+        Scrn_Move_Set(4, 0, 0x100);
+    }
+    if (--Fade_Gap_Timer != 0) {
+        return 0;
+    }
+    Forbid_Break = 1;
+    return 1;
+}
+
+
+
+/* Start fade fade_code in mode fade_mode.  Returns 0 if a fade is already running. */
+s32 Request_Fade(fade_code, fade_mode)
+u16 fade_code;
+u8 fade_mode;
+{
+    if (Fade_Flag == 0) {
+        Fade_Flag = 1;
+        Fade_Mode = fade_mode;
+        Fade_R_No0 = Fade_R_No1 = 0;
+        Fade_Number = fade_code;
+        Forbid_Break = 1;
+        fade_cont_init();
+        Fade_Gap_Timer = 3;
+        return 1;
+    }
+    return 0;
+}
+
+
+
+/* provisional name */
+void Switch_Screen_Init_Panel(s16 kind) {
+    s16 k;
+    Forbid_Break = 1;
+    Exec_Wipe = 1;
+    Stop_SG = 1;
+    Escape_SS = 1;
+    Text_Page_Y = 32;
+    Wipe_Panel_Count = 5;
+    load_any_color(0x9E);
+    k = kind;
+    effect_D2_init(0, 0, k, 1);
+    effect_D2_init(0, 1, k, 1);
+    effect_D2_init(0, 2, k, 1);
+    effect_D2_init(0, 3, k, 1);
+}
+
+
+/* provisional name */
+s32 Switch_Screen_Wipe_End(void) {
+    if (Wipe_Panel_Count == 0) {
+        Exec_Wipe = 0;
+        Stop_Combo = 0;
+        return 1;
+    }
+    return 0;
+}
+
+
+
+/* Start screen wipe kind, drawn in wipe_mode (see Switch_Screen). */
+void Switch_Screen_Init(kind, wipe_mode)
+s16 kind;
+u8 wipe_mode;
+{
+    Forbid_Break = 1;
+    Exec_Wipe = 1;
+    Wipe_Kind = kind;
+    Wipe_Limit = wipe_set_pattern_tbl[kind].limit;
+    Wipe_Mode = wipe_mode;
+    Wipe_Count = 0;
+    Stop_SG = 1;
+    Escape_SS = 1;
+}
+
+
+
+/* One step of the wipe that covers the screen, drawn in Wipe_Mode; 1 when the wipe is complete. */
+s32 Switch_Screen(void) {
+    switch ((s8)Wipe_Mode) {
+    case 0:
+        wipe_pattern_set((s8)Wipe_Kind, Wipe_Count, 0);
+        if (++Wipe_Count < (s8)Wipe_Limit) {
+            return 0;
+        }
+        Exec_Wipe = 0;
+        Stop_Combo = 0;
+        return 1;
+    case 1:
+        wipe_pattern_or_cols((s8)Wipe_Kind, Wipe_Count);
+        if (++Wipe_Count < (s8)Wipe_Limit) {
+            return 0;
+        }
+        Exec_Wipe = 0;
+        Stop_Combo = 0;
+        return 1;
+    case 2:
+        wipe_pattern_and_low((s8)Wipe_Kind, Wipe_Count);
+        if (++Wipe_Count < (s8)Wipe_Limit) {
+            return 0;
+        }
+        Exec_Wipe = 0;
+        Stop_Combo = 0;
+        return 1;
+    case 3:
+    case 4:
+        wipe_pattern_or_cols((s8)Wipe_Kind, Wipe_Count);
+        if (++Wipe_Count < (s8)Wipe_Limit) {
+            return 0;
+        }
+        Exec_Wipe = 0;
+        Stop_Combo = 0;
+        return 1;
+    case 5:
+        wipe_mask_and_cols((s8)Wipe_Kind, Wipe_Count);
+        if (++Wipe_Count < (s8)Wipe_Limit) {
+            return 0;
+        }
+        return 1;
+    }
+    return 0;
+}
+
+
+
+/* One step of the wipe that uncovers the screen again; 1 when the wipe is complete. */
+s32 Switch_Screen_Revival(void) {
+    switch ((s8)Wipe_Mode) {
+    case 0:
+        wipe_pattern_set((s8)Wipe_Kind, Wipe_Count, 1);
+        if (++Wipe_Count < (s8)Wipe_Limit) {
+            return 0;
+        }
+        Exec_Wipe = 0;
+        Escape_SS = 0;
+        return 1;
+    case 1:
+        wipe_pattern_restore_cols((s8)Wipe_Kind, Wipe_Count);
+        if (++Wipe_Count < (s8)Wipe_Limit) {
+            return 0;
+        }
+        Exec_Wipe = 0;
+        Escape_SS = 0;
+        return 1;
+    case 3:
+    case 4:
+        wipe_pattern_restore_cols((s8)Wipe_Kind, Wipe_Count);
+        if (++Wipe_Count < (s8)Wipe_Limit) {
+            return 0;
+        }
+        Exec_Wipe = 0;
+        Escape_SS = 0;
+        return 1;
+    case 5:
+        wipe_mask_set_cols((s8)Wipe_Kind, Wipe_Count);
+        if (++Wipe_Count < (s8)Wipe_Limit) {
+            return 0;
+        }
+        Exec_Wipe = 0;
+        return 1;
+    }
+    return 0;
+}
+
+
+
+/* The text (SS) layer is one 64-row tilemap in SS RAM, 4 bytes per cell (code, attribute): page 0 is rows 0-31
+ * (+0x0000-0x1FFF), page 1 rows 32-63 (+0x2000-0x3FFF). The layer is scrolled to show one page: Text_Page_Y (0 or 32)
+ * is the row text is printed on, and Scrn_Move_Set(4, 0, 0 / 0x100) shows page 0 / page 1. Bit 8 of the cell code
+ * goes into the attribute's low bit. These two fill a whole page with one cell: (0, 32) clears it with spaces. */
+void scfont_page0_fill(u32 attr, u16 code) {
+    u16 att;
+    u16* p;
+    att = (s32)(code & 0x100) >> 8 | attr;
+    p = (u16*)SS_RAM;
+    do {
+        p[0] = code;
+        p[1] = att;
+        p += 2;
+    } while (p < (u16*)(SS_RAM + 0x2000));
+}
+
+
+
+/* Page 1 of the text layer (see scfont_page0_fill). Returns the attribute word: DEMO.c passes it on as its own result. */
+void scfont_page1_fill(u32 attr, u16 code) {
+    u16 att;
+    u16* p;
+    att = (s32)(code & 0x100) >> 8 | attr;
+    p = (u16*)(SS_RAM + 0x2000);
+    do {
+        p[0] = code;
+        p[1] = att;
+        p += 2;
+    } while (p < (u16*)(SS_RAM + 0x3FFF));
+}
+
+
+
+/* provisional name */
+void scrn_pos_clear(void) {
+    SCRLPOS* p;
+    SCRLPOS* q;
+    p = scrn_pos;
+    while (p < &scrn_pos[4]) {
+        q = p;
+        p->set_x.cal = 0;
+        p++;
+        q->cur_x.cal = 0;
+        q->set_y.cal = 0;
+        q->cur_y.cal = 0;
+        q = p;
+        p->set_x.cal = 0;
+        p++;
+        q->cur_x.cal = 0;
+        q->set_y.cal = 0;
+        q->cur_y.cal = 0;
+    }
+}
+
+
+
+void Clear_Flash_No(void) {
+    F_No0[0] = F_No1[0] = F_No2[0] = F_No3[0] = 0;
+    F_No0[1] = F_No1[1] = F_No2[1] = F_No3[1] = 0;
+    Personal_Disp_Flag = 0;
+}
+
+
+
+/* Erases the 18-character banner on the text layer: at the right-hand column when the new challenger is player 2. */
+/* provisional name */
+void challenger_banner_clear(void) {
+    Forbid_Break = 1;
+    if (New_Challenger) {
+        tilemap_print_string_attr(30, 0, 18, "                  ");
+    } else {
+        tilemap_print_string_attr(0, 0, 18, "                  ");
+    }
+}
+
+
+
+void Setup_Play_Type(void) {
+    if (Operator_Status[0] & 0x7F && Operator_Status[1] & 0x7F) {
+        Play_Type = PLAY_VS_PLAYER;
+    } else {
+        Play_Type = PLAY_VS_CPU;
+    }
+}
+
+/* Build this player's ranking entry and try it against all four ranking tables:
+   score, wins, CPU grade and grade.  Returns 1 if the player made any of them. */
+u32 Check_Ranking(PL_id)
+s16 PL_id;
+{
+    if (Version_Type == 3) {
+        return 0;
+    }
+    if (Version_Type != 7 && Version_Type != 5) {
+        Present_Data[PL_id].name[0] = 12;
+        Present_Data[PL_id].name[1] = 10;
+        Present_Data[PL_id].name[2] = 25;
+    }
+    Present_Data[PL_id].player = Stock_My_char[PL_id];
+    Present_Data[PL_id].player_color = Stock_Player_Color[PL_id];
+    Present_Data[PL_id].score = Continue_Coin[PL_id] + Score[PL_id][SCORE_CPU];
+    Present_Data[PL_id].wins = Stock_Win_Record[PL_id];
+    Present_Data[PL_id].cpu_grade = judge_final[PL_id][0].vs_cpu_grade[12];
+    Present_Data[PL_id].grade = Best_Grade[PL_id];
+    if (Break_Com[PL_id][0]) {
+        Present_Data[PL_id].all_clear = 1;
+    } else {
+        Present_Data[PL_id].all_clear = 0;
+    }
+    Rank_In[PL_id][RANK_SCORE] = Check_Sort_Score(PL_id);
+    if (Rank_In[PL_id][RANK_SCORE] >= 0 && Rank_In[PL_id ^ 1][RANK_SCORE] >= 0) {
+        Check_Partners_Rank(0, PL_id);
+    }
+    Rank_In[PL_id][RANK_WINS] = Check_Sort_Wins(PL_id);
+    if (Rank_In[PL_id][RANK_WINS] >= 0 && Rank_In[PL_id ^ 1][RANK_WINS] >= 0) {
+        Check_Partners_Rank(1, PL_id);
+    }
+    Rank_In[PL_id][RANK_CPU_GRADE] = Check_Sort_CPU_Grade(PL_id);
+    if (Rank_In[PL_id][RANK_CPU_GRADE]) {
+        Rank_In[PL_id][RANK_CPU_GRADE] = -1;
+    } else {
+        Rank_In[PL_id ^ 1][RANK_CPU_GRADE] = -1;
+    }
+    Rank_In[PL_id][RANK_GRADE] = Check_Sort_Grade(PL_id);
+    if (Rank_In[PL_id][RANK_GRADE]) {
+        Rank_In[PL_id][RANK_GRADE] = -1;
+    } else {
+        Rank_In[PL_id ^ 1][RANK_GRADE] = -1;
+    }
+    if (Rank_In[PL_id][RANK_SCORE] >= 0 || Rank_In[PL_id][RANK_WINS] >= 0 || Rank_In[PL_id][RANK_CPU_GRADE] >= 0 || Rank_In[PL_id][RANK_GRADE] >= 0) {
+        return 1;
+    }
+    return 0;
+}
+
+
+
+/* After PL_id's entry goes into ranking table dir_step at or above the partner's place, moves the partner's
+   place down one (off the table past the last place). */
+void Check_Partners_Rank(dir_step, PL_id)
+s16 dir_step;
+s16 PL_id;
+{
+    if (Rank_In[PL_id][dir_step] > Rank_In[PL_id ^ 1][dir_step]) {
+        return;
+    }
+    Rank_In[PL_id ^ 1][dir_step]++;
+    if (Rank_In[PL_id ^ 1][dir_step] > 4) {
+        Rank_In[PL_id ^ 1][dir_step] = -1;
+    }
+}
+
+
+
+/* Inserts the player's result into the score ranking: returns the place, or -1 when it did not make the table. */
+s32 Check_Sort_Score(PL_id)
+s16 PL_id;
+{
+    s16 i;
+    s16 j;
+    for (i = 0; i < 5; i++) {
+        if (Ranking_Data[i].score < Present_Data[PL_id].score) {
+            for (j = 3; j >= i; j--) {
+                Ranking_Data[j + 1] = Ranking_Data[j];
+            }
+            Ranking_Data[i] = Present_Data[PL_id];
+            return i;
+        }
+    }
+    return -1;
+}
+
+
+
+/* Inserts the player's result into the wins ranking: returns the place, or -1 when it did not make the table. */
+s32 Check_Sort_Wins(PL_id)
+s16 PL_id;
+{
+    s16 i;
+    s16 j;
+    RANK_DATA *rp;
+    for (i = 0; i < 5; i++) {
+        rp = Ranking_Data;
+        if (Ranking_Data[i + 5].wins < Present_Data[PL_id].wins) {
+            for (j = 3; j >= i; j--) {
+                rp[j + 5 + 1] = rp[j + 5];
+            }
+            Ranking_Data[i + 5] = Present_Data[PL_id];
+            return i;
+        }
+    }
+    return -1;
+}
+
+
+
+/* Inserts the player's result into the CPU-grade ranking: returns the place, or -1 when it did not make the
+   table. */
+s32 Check_Sort_CPU_Grade(PL_id)
+s16 PL_id;
+{
+    s16 i;
+    s16 j;
+    for (i = 0; i < 5; i++) {
+        if (!Check_CPU_Grade_Score(PL_id, i)) {
+            continue;
+        }
+        for (j = 3; j >= i; j--) {
+            Ranking_Data[j + 10 + 1] = Ranking_Data[j + 10];
+        }
+        Ranking_Data[i + 10] = Present_Data[PL_id];
+        return i;
+    }
+    return -1;
+}
+
+
+
+/* Inserts the player's result into the grade ranking: returns the place, or -1 when it did not make the table. */
+s32 Check_Sort_Grade(PL_id)
+s16 PL_id;
+{
+    s16 i;
+    s16 j;
+    for (i = 0; i < 5; i++) {
+        if (!Check_Grade_Score(PL_id, i)) {
+            continue;
+        }
+        for (j = 3; j >= i; j--) {
+            Ranking_Data[j + 15 + 1] = Ranking_Data[j + 15];
+        }
+        Ranking_Data[i + 15] = Present_Data[PL_id];
+        return i;
+    }
+    return -1;
+}
+
+
+
+/* Nonzero when the player's result beats entry i of the CPU-grade ranking: a higher CPU grade, or the same
+   grade and a higher score. */
+s32 Check_CPU_Grade_Score(PL_id, i)
+s16 PL_id;
+s16 i;
+{
+    if (Ranking_Data[i + 10].cpu_grade > Present_Data[PL_id].cpu_grade) {
+        return 0;
+    }
+    if (Ranking_Data[i + 10].cpu_grade < Present_Data[PL_id].cpu_grade) {
+        return 1;
+    }
+    if (Ranking_Data[i + 10].score >= Present_Data[PL_id].score) {
+        return 0;
+    }
+    return 1;
+}
+
+
+
+/* Nonzero when the player's result beats entry i of the grade ranking: a higher grade, or the same grade and
+   more wins. */
+s32 Check_Grade_Score(PL_id, i)
+s16 PL_id;
+s16 i;
+{
+    if (Ranking_Data[i + 15].grade > Present_Data[PL_id].grade) {
+        return 0;
+    }
+    if (Ranking_Data[i + 15].grade < Present_Data[PL_id].grade) {
+        return 1;
+    }
+    if (Ranking_Data[i + 15].wins >= Present_Data[PL_id].wins) {
+        return 0;
+    }
+    return 1;
+}
+
+u8 *Setup_Final_Grade(void) {
+    if (Break_Com[Player_id][0] == 0) {
+        Final_Result_id = LOSER;
+        WGJ_Target = LOSER;
+        WGJ_Win = Win_Record[LOSER];
+        WGJ_Score = Continue_Coin[LOSER] + Score[LOSER][SCORE_CPU];
+    }
+}
+
+
+
+/* provisional name */
+s32 Button_Cut_Hold(s16* timer, s16 first, s16 repeat) {
+    s16 side;
+    s16 trig;
+    if (Reserve_Cut) {
+        if (repeat >= *timer) {
+            Reserve_Cut = 0;
+            return 1;
+        } else {
+            return 0;
+        }
+    }
+    side = Setup_Target_PL();
+    if (side) {
+        trig = ~p2sw_1 & p2sw_0;
+    } else {
+        trig = ~p1sw_1 & p1sw_0;
+    }
+    if (trig & BUTTON_SHOTS) {
+        if (repeat >= *timer) {
+            Reserve_Cut = 0;
+            return 1;
+        } else {
+            Reserve_Cut = 1;
+            return 0;
+        }
+    } else {
+        if (first < *timer) {
+            return 0;
+        }
+        if (side) {
+            if (p2sw_0 & BUTTON_SHOTS) {
+                Reserve_Cut = 0;
+                return 1;
+            }
+            return 0;
+        }
+        if (p1sw_0 & BUTTON_SHOTS) {
+            Reserve_Cut = 0;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+
+
+/* Count down *Timer: 1 when it reaches zero, or sooner once it is at most Limit_Time while the
+   target player (Setup_Target_PL) holds a button. */
+s32 Button_Cut_EX(s16* Timer, s16 Limit_Time) {
+    s16 PL_id = Setup_Target_PL();
+    u16 xx;
+    if (PL_id) {
+        xx = p2sw_0;
+    } else {
+        xx = p1sw_0;
+    }
+    --*Timer;
+    if (*Timer == 0) {
+        return 1;
+    }
+    if ((xx & BUTTON_SHOTS) && Limit_Time >= *Timer) {
+        return 1;
+    }
+    return 0;
+}
+
+
+
+/* Which side's buttons may cut a scene short: the winner in a two-player match,
+   otherwise the side that is being played (1P unless only 2P is in). */
+s32 Setup_Target_PL(void) {
+    if (Play_Type == PLAY_VS_PLAYER) {
+        return Winner_id;
+    }
+    if (Round_Operator[0]) {
+        return 0;
+    }
+    return 1;
+}
+
+
+
+/* provisional name */
+void Disp_Digit8x16(u32 value, s16 x, s16 y) {
+    s16 i;
+    s16 j;
+    s32 div;
+    s16 First_Digit;
+    s16 Digit[8];
+    if (value == 0) {
+        score8x16_put(x, y, 16, 0);
+    }
+    for (i = 7, div = 10000000, First_Digit = -1; i > 0; i--, div = div / 10) {
+        Digit[i] = value / div;
+        value -= div * Digit[i];
+        if (First_Digit < 0) {
+            if (Digit[i]) {
+                First_Digit = i;
+            }
+        }
+    }
+    Digit[0] = value;
+    i = x - First_Digit;
+    for (j = First_Digit; j >= 0; j--, i++) {
+        score8x16_put(i, y, 16, Digit[j]);
+    }
+}
+
+
+
+void Disp_Digit16x24(u32 value, s16 x, s16 y, u16 attr) {
+    s16 i;
+    s16 j;
+    s32 div;
+    s16 First_Digit;
+    s16 Digit[8];
+    if (value == 0) {
+        score16x24_put(x, y, 30, 0);
+    }
+    for (i = 7, div = 10000000, First_Digit = -1; i > 0; i--, div = div / 10) {
+        Digit[i] = value / div;
+        value -= div * Digit[i];
+        if (First_Digit < 0) {
+            if (Digit[i]) {
+                First_Digit = i;
+            }
+        }
+    }
+    Digit[0] = value;
+    i = x - (First_Digit * 2);
+    for (j = First_Digit; j >= 0; j--, i += 2) {
+        score16x24_put(i, y, attr, Digit[j]);
+    }
+}
+
+
+
+/* provisional name */
+void Disp_Win_Type(void) {
+    s16 i;
+    for (i = 0; i <= Battle_Round[Play_Type]; i++) {
+        win_mark_put(i, win_type[0][i], 14);
+        win_mark_put(i + 4, win_type[1][i], 14);
+    }
+}
+
+/* provisional name */
+void commit_name_entry_row_both_players(pos_y)
+s16 pos_y;
+{
+    if (E_Number[0][0] == ENTRY_NAME && name_wk[0].dmm) {
+        rank_display_set(0, pos_y);
+    }
+    if (E_Number[1][0] == ENTRY_NAME && name_wk[1].dmm) {
+        rank_display_set(1, pos_y);
+    }
+}
+
+
+s32 Ck_Range_Out_S(WORK_Other* ewk, s16 BG_No, s16 R) {
+    s16 x;
+    x = ewk->wu.xyz[0].disp.pos - bg_w.bgw[BG_No].wxy[0].disp.pos;
+    if (x < 0) {
+        x = -x;
+    }
+    if (x - R > 192) {
+        return 1;
+    }
+    return 0;
+}
+
+
+/* provisional name */
+s32 Count_Tens(s16 x) {
+    s16 n = 0;
+    while (x > 10) {
+        x -= 10;
+        n++;
+    }
+    return n;
+}
+
+
+
+void Disp_Copyright(void) {
+    s16* py = &Text_Page_Y;
+    void (*fp)(s32 x, s32 y, s32 attr, const s8* str) = (void (*)(s32, s32, s32, const s8*))tilemap_print_string_attr;
+    register s16* px = &DE_X[0];
+    switch (Country) {
+    case 1:
+    case 2:
+    case 3:
+    case 7:
+    case 8:
+        fp(*px + 3, *py + 26, 18, Capcom_Rights_msg);
+        break;
+    case 4:
+    case 5:
+    case 6:
+        fp(*px + 1, *py + 25, 18, Capcom_Rights_msg2);
+        fp(*px + 1, *py + 26, 18, Capcom_USA_Rights_msg);
+        break;
+    }
+}
+
+
+
+/* 1 while a player (not the CPU) holds a button. */
+s32 Cut_Cut_Cut(void) {
+    s32 m = 0x3F0;
+    PLW* pl = plw;
+    if (pl[0].wu.operator && (p1sw_0 & m)) {
+        return 1;
+    }
+    if (pl[1].wu.operator && (p2sw_0 & m)) {
+        return 1;
+    }
+    return 0;
+}
+
+
+
+s32 Cut_Cut_Sub(s16 cut) {
+    if (plw[0].wu.operator) {
+        if (p1sw_0 & BUTTON_SHOTS) {
+            return cut;
+        }
+    }
+    if (plw[1].wu.operator) {
+        if (p2sw_0 & BUTTON_SHOTS) {
+            return cut;
+        }
+    }
+    return 1;
+}
+
+
+
+s8 Cut_Cut_Loser(void) {
+    if (Round_Operator[0]) {
+        if (p1sw_0 & BUTTON_SHOTS) {
+            return 1;
+        }
+    }
+    if (Round_Operator[1]) {
+        if (p2sw_0 & BUTTON_SHOTS) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+
+
+/* Counts the scene timer down; returns what is left, 0 when a button cut the scene. */
+s32 Cut_Cut_C_Timer(void) {
+    C_Timer--;
+    if (!Cut_Cut_Cut()) {
+        return C_Timer;
+    }
+    return C_Timer = 0;
+}
+
+
+s32 cpu_algorithm(s16 id) {
+    u16 lvr = *Demo_Ptr[id];
+    Demo_Ptr[id]++;
+    return lvr;
+}

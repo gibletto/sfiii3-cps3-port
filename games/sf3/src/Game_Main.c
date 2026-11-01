@@ -1,0 +1,1462 @@
+/*
+ * GAME_MAIN.C  Game phase dispatcher: title, select, fight, bonus, continue, ending
+ *
+ * Game runs the current game phase from G_No1: Game00 (title / attract entry),
+ * Game01 (player select and fight HUD setup via Game01_Sub), Game02 (the fight), Game04 (loser
+ * scene), Game05 (next CPU selection), Game06 (game over), Game07 (continue), Game08 (ending and
+ * final grade), Game09 (bonus stage), Game10 (after-bonus screen) and Game11 (handicap setting).
+ * Game2_1 is the fight frame: round timer (Time_Control), player control
+ * (Player_control), vital and combo displays, Game_Management, the seven effect lists and
+ * hit_check_main_process. Bonus_Sub does the same for a bonus stage.
+ * Loop_Demo handles a coin during the demo (Ck_Coin sees a coin, service input or free-play
+ * start); Loop_Demo_Sub, Before_Select_Sub and
+ * Erase_Insert_Coin serve the attract loop; Disp_Ranking and Request_Break_Sub handle the
+ * ranking screen and break-in requests. draw_operator_info places operator text for the current
+ * screen mode.
+ */
+
+#include "structs.h"
+#include "work.h"
+#include "romdata.h"
+#include "extern.h"
+#include "end_sub.h"
+#include "end_sub_2.h"
+#include "end_sub_3.h"
+#include "end_sub_4.h"
+#include "end_sub_5.h"
+#include "end_sub_6.h"
+#include "end_sub_7.h"
+#include "color3rd.h"
+#include "end_sub_8.h"
+#include "sys_config.h"
+#include "sys_config_2.h"
+#include "sys_config_3.h"
+#include "bg0001.h"
+#include "SYS_sub.h"
+#include "Entry.h"
+#include "entry_2.h"
+#include "SYS_sub2.h"
+#include "end_main.h"
+#include "aboutspr.h"
+#include "se_2.h"
+#include "se_3.h"
+#include "Grade.h"
+#include "demo00.h"
+#include "demo01.h"
+#include "demo02_code.h"
+#include "RANKING.h"
+#include "Manage.h"
+#include "manage_2.h"
+#include "Win.h"
+#include "win_2.h"
+#include "next_cpu.h"
+#include "sc_trans.h"
+#include "sc_clear.h"
+#include "cmb_win.h"
+#include "VITAL.h"
+#include "count.h"
+#include "spgauge.h"
+#include "EFFECT.h"
+#include "effect_2.h"
+#include "effj4.h"
+#include "effj5.h"
+#include "effJ6.h"
+#include "EFFJ0.h"
+#include "effj1.h"
+#include "effj2_code.h"
+#include "PLCNTDAT.h"
+#include "plcntdat_2.h"
+#include "PLCNT3.h"
+#include "sys_test.h"
+#include "sys_test_2.h"
+#include "sys_test_2b.h"
+#include "sys_test_2c.h"
+#include "sys_test_3.h"
+#include "sys_test_4.h"
+#include "sys_test_5.h"
+#include "textsound.h"
+#include "textsound_2.h"
+#include "textsound_3.h"
+#include "PLCNT2.h"
+#include "EFFM7.h"
+#include "BBBSCOM.h"
+#include "bg_sub.h"
+#include "bg_sub_2.h"
+#include "bg_sub_3.h"
+#include "bg_sub_4.h"
+#include "bg_sub_5.h"
+#include "HITCHECK.h"
+#include "cmb_cont.h"
+#include "eff35.h"
+#include "eff56.h"
+#include "eff57.h"
+#include "EFF58.h"
+#include "SLOWF.h"
+#include "sc_sub.h"
+#include "sc_sub_2.h"
+#include "bg000.h"
+#include "ta_sub2.h"
+#include "tate00.h"
+#include "ta_sub.h"
+#include "Game_Main.h"
+#include "eeprom.h"
+#include "SE.h"
+#include "meta_col.h"
+#include "meta_col_mem.h"
+#include "meta_col_strcpy.h"
+#include "meta_col_lib.h"
+#include "meta_col_bcd.h"
+#include "EM_Cand.h"
+#include "lose_pl.h"
+#include "PLS02.h"
+#include "fighter.h"
+
+/* G_No3 in Disp_Ranking */
+#define G3_RANK_INIT    0       /* save the screen and wipe */
+#define G3_RANK_SETUP   1       /* set up the ranking */
+#define G3_RANK_COVER   2       /* wait out the cover, then wipe in */
+#define G3_RANK_REVIVAL 3       /* finish the wipe */
+
+
+
+void Scrn_Move_Set(s32 n, s16 x, s16 y);
+
+void sound_reg_level_set(s16 pitch, s8 volume);
+
+#pragma noregsave(game_frame_task)
+#pragma inline(bg0001)
+
+
+
+/* Frame task started by mode_init_task: every frame run the current game routine
+   (bg0001), then the colour transfer and the frame render pipeline, and sleep
+   until the next frame. */
+/* provisional name */
+void game_frame_task(void) {
+    if (DEBUG_SLOW) {
+        task_sleep(1);
+    }
+loop:
+    bg0001();
+    color_trans_dummy();
+    sprite_bank_flip();
+    task_sleep(1);
+    goto loop;
+}
+
+
+
+/* Game task jump: run Loop_Demo (G0_DEMO), Game (G0_GAME) or Game_Dummy by the top-level game
+   number G_No0. */
+void bg0001(void) {
+    void (*Main_Jmp_Tbl[3])() = { Loop_Demo, Game, Game_Dummy };
+    Main_Jmp_Tbl[G_No0]();
+}
+
+
+
+void Loop_Demo(void) {
+    if (Ck_Coin()) {
+        tilemap_fill_all(0, 32);
+        wipe_pattern_set(0, 7, 0);
+        if (G_No1 != G1_DEMO_RESTART) {
+            sound_driver_init();
+        }
+        sound_reg_level_set(0, 0);
+        card_work_clear();
+        bg_vbl_trans_flag = 0;
+        if (Demo_Flag == 0) {
+            sound_request(115);
+        }
+        G_No0 = G0_GAME;
+        G_No1 = G1_TITLE;
+        G_No2 = G2_TITLE;
+        G_No3 = 0;
+        D_No0 = 0;
+        D_No1 = 0;
+        D_No2 = 0;
+        D_No3 = 0;
+        Demo_Flag = 1;
+        BGM_Stop();
+        Before_Select_Sub();
+        if (Free_Play) {
+            G_No2 = G2_TITLE_FREE;
+            Exit_Title_Sub_Entry();
+            return;
+        } else {
+            E_No0 = E0_TITLE;
+            E_No1 = 0;
+            E_No2 = 0;
+            E_No3 = 0;
+        }
+        return;
+    }
+    switch (G_No1) {
+    case G1_DEMO_INIT:
+        G_No1++;
+        G_No2 = 0;
+        G_No3 = 0;
+        D_No0 = 0;
+        D_No1 = 0;
+        D_No2 = 0;
+        D_No3 = 0;
+        E_No1 = 99;
+        Demo_PL_Index = 0;
+        Demo_Stage_Index = 0;
+        Select_Demo_Index = 0;
+        Text_Page_Y = 0;
+        Insert_Y = 23;
+        Demo_Flag = 0;
+        if (DEBUG_DISP) {
+            tilemap_print_hex_block(20, 1, 18, G_No0, 4, 0);
+        }
+        wipe_pattern_set(0, 7, 0);
+        scfont_page0_fill(0, 32);
+        break;
+    case G1_DEMO_LOGO:
+        draw_operator_info(Text_Page_Y);
+        Basic_Sub();
+        if (CAPCOM_Logo()) {
+            Loop_Demo_Sub();
+            Erase_Insert_Coin();
+            Insert_Y = 23;
+            E_No1 = 2;
+            bg_vbl_trans_flag = 0;
+        }
+        break;
+    case G1_DEMO_TITLE:
+        draw_operator_info(Text_Page_Y);
+        Basic_Sub();
+        hit_check_main_process();
+        if (Title()) {
+            Loop_Demo_Sub();
+            Erase_Insert_Coin();
+            D_No0 = 1;
+            Demo_Lever_Play = 0;
+            Insert_Y = 17;
+        }
+        break;
+    case G1_DEMO_PLAY:
+        draw_operator_info(Text_Page_Y);
+        if (Play_Demo()) {
+            Loop_Demo_Sub();
+            Rank_Type = 0;
+            Demo_Type = 0;
+            Text_Page_Y = 32;
+            Scrn_Move_Set(4, 0, 0x100);
+            sound_driver_init();
+            if (Version_Type == 3) {
+                G_No1 = G1_DEMO_LOGO;
+                E_No1 = 99;
+                if (++Select_Demo_Index > 3) {
+                    Select_Demo_Index = 0;
+                }
+            }
+        }
+        break;
+    case G1_DEMO_RANKING:
+        draw_operator_info(Text_Page_Y);
+        Basic_Sub();
+        if (Ranking()) {
+            Loop_Demo_Sub();
+        }
+        break;
+    case G1_DEMO_PLAY2:
+        draw_operator_info(Text_Page_Y);
+        if (Play_Demo()) {
+            Loop_Demo_Sub();
+            Demo_Type = 1;
+            Rank_Type = 5;
+            Demo_Type = 1;
+            Text_Page_Y = 32;
+            Scrn_Move_Set(4, 0, 0x100);
+            sound_driver_init();
+            if (Version_Type == 3) {
+                G_No1 = G1_DEMO_LOGO;
+                E_No1 = 99;
+            }
+        }
+        break;
+    case G1_DEMO_RANKING2:
+        draw_operator_info(Text_Page_Y);
+        Basic_Sub();
+        if (Ranking()) {
+            Loop_Demo_Sub();
+            G_No1 = G1_DEMO_LOGO;
+            E_No1 = 99;
+        }
+        break;
+    default:
+        switch (G_No2) {
+        case 0:
+            if (--Cover_Timer == 0) {
+                G_No2++;
+                Switch_Screen_Init(0, 0);
+            }
+            break;
+        default:
+            G_No1 = G1_DEMO_LOGO;
+            G_No2 = 0;
+            E_No3 = 0;
+            E_No1 = 99;
+            Demo_PL_Index = 0;
+            Demo_Stage_Index = 0;
+            Select_Demo_Index = 0;
+            Text_Page_Y = 0;
+            Demo_Flag = 0;
+            break;
+        }
+        break;
+    }
+}
+
+
+
+void Loop_Demo_Sub(void) {
+    G_No1++;
+    G_No2 = 0;
+    D_No0 = 0;
+    D_No1 = 0;
+    D_No2 = 0;
+    D_No3 = 0;
+    E_No1 = 1;
+    Scrn_Move_Set(4, 0, 0);
+}
+
+
+
+/* provisional name */
+void Erase_Insert_Coin(void) {
+    tilemap_print_string_attr(DE_X[0] + 14, Insert_Y, 18, "              ");
+    tilemap_print_string_attr(DE_X[0] + 14, Insert_Y + 32, 18, "              ");
+}
+
+
+
+void Before_Select_Sub(void) {
+    s16 xx;
+    Request_G_No = 0;
+    Request_E_No = 0;
+    Allow_a_battle_f = 0;
+    Bonus_Type = 0;
+    if (Demo_Flag == 0) {
+        Control_Time = 2048;
+        Round_Level = 7;
+    } else {
+        Control_Time = 481;
+    }
+    Super_Arts[0] = 0;
+    Super_Arts[1] = 0;
+    Exec_Wipe = 0;
+    Fade_Flag = 0;
+    Stock_Com_Color[0] = -1;
+    Stock_Com_Arts[0] = -1;
+    Stock_Com_Color[1] = -1;
+    Stock_Com_Arts[1] = -1;
+    Bonus_Game_Flag = 0;
+    Combo_Demo_Flag = 0;
+    paring_counter[0] = 0;
+    paring_bonus_r[0] = 0;
+    paring_counter[1] = 0;
+    paring_bonus_r[1] = 0;
+    Gill_Pos_X = 0x200;
+    Clear_Disp_Ranking(0);
+    Clear_Disp_Ranking(1);
+    Clear_Personal_Data(0);
+    grade_check_work_1st_init(0, 0);
+    grade_check_work_1st_init(0, 1);
+    Clear_Personal_Data(1);
+    grade_check_work_1st_init(1, 0);
+    grade_check_work_1st_init(1, 1);
+    Last_Player_id = Player_Number = -1;
+    Round_Level = 3;
+    Time_in_Time = 60;
+    xx = system_timer;
+    Random_ix16_com = xx & 0x3F;
+    Random_ix32_com = xx & 0x7F;
+}
+
+
+
+void Game(void) {
+    void (*Game_Jmp_Tbl[12])() = { Game00, Game01, Game02, Game03, Game04, Game05, Game06, Game07, Game08, Game09, Game10, Game11 };
+    Game_Jmp_Tbl[G_No1]();
+}
+
+
+
+void Game00(void) {
+    void (*Game00_Jmp_Tbl[6])() = { Game0_0, Game0_1, Game0_2, Game0_3, Game0_2, Game0_3 };
+    Game00_Jmp_Tbl[G_No2]();
+    Basic_Sub();
+}
+
+
+
+void Game0_0(void) {
+    if (Title_At_a_Dash() != 0) {
+        G_No2++;
+    }
+}
+
+
+
+void Game0_1(void) {
+    if (Request_G_No) {
+        G_No2++;
+    }
+}
+
+
+
+void Scrn_Move_Set(s32 n, s16 x, s16 y);
+
+
+
+/* Title hand-off: step the game routine, save the screen and start wipe 0. */
+void Game0_2(void) {
+    G_No2++;
+    sc_vram_to_ram();
+    Switch_Screen_Init(0, 1);
+}
+
+
+
+/* provisional name */
+void Game0_3(void) {
+    if (Switch_Screen()) {
+        G_No1++;
+        G_No2 = G2_SEL_INIT;
+        G_No3 = 0;
+        Cover_Timer = 23;
+    }
+}
+
+
+
+void Game01(void) {
+    Basic_Sub();
+    Setup_Play_Type();
+    switch (G_No2) {
+    case G2_SEL_INIT:
+        G_No2++;
+        S_No = 0;
+        S_Sub_No = 0;
+        S_Sub2_No = 0;
+        S_Sub3_No = 0;
+        Break_Into = 0;
+        Stop_Combo = 0;
+        load_any_color(5);
+        init_slow_flag();
+        break;
+    case G2_SEL_MAIN:
+        if (Select_Player()) {
+            G_No2++;
+            Bonus_Game_Flag = 0;
+            load_any_color(2);
+            Game01_Sub();
+            sc_vram_to_ram();
+            Switch_Screen_Init(3, 3);
+        }
+        break;
+    default:
+        Select_Player();
+        if (Switch_Screen()) {
+            Cover_Timer = 24;
+            appear_type = APPEAR_ENTRY;
+            if (Demo_Flag) {
+                G_No1 = G1_FIGHT;
+                G_No2 = G2_FIGHT_INIT;
+                E_No0 = E0_FIGHT;
+                E_No1 = 0;
+                E_No2 = 0;
+                E_No3 = 0;
+                Demo_Lever_Play = 0;
+            } else {
+                Demo_Time_Stop = 1;
+                plw[0].wu.operator = 0;
+                Operator_Status[0] = 0;
+                plw[1].wu.operator = 0;
+                Operator_Status[1] = 0;
+            }
+            purge_char_gfx(0x9060);
+            if (plw[0].wu.operator != 0) {
+                Sel_Arts_Complete[0] = -1;
+            }
+            if (plw[1].wu.operator != 0) {
+                Sel_Arts_Complete[1] = -1;
+            }
+            if (plw[0].wu.operator != 0 && plw[1].wu.operator != 0) {
+                Play_Type = PLAY_VS_PLAYER;
+            } else {
+                Play_Type = PLAY_VS_CPU;
+            }
+            BGM_Stop();
+        }
+        break;
+    }
+}
+
+
+
+void Game01_Sub(void) {
+    tilemap_print_string_attr((*(const s16(*)[2][2])&(Entry_Msg_X_Data[4]))[0][Game_setting.Screen_Mode], 0, 18, "                   ");
+    tilemap_print_string_attr((*(const s16(*)[2][2])&(Entry_Msg_X_Data[4]))[1][Game_setting.Screen_Mode], 0, 18, "                   ");
+    vital_cont_init();
+    combo_cont_init();
+    count_cont_init(0);
+    player_name();
+    player_face();
+    PL_Wins[0] = 0;
+    PL_Wins[1] = 0;
+    Score[0][SCORE_VS] = 0;
+    Score[0][SCORE_ROUND] = 0;
+    Score[1][SCORE_VS] = 0;
+    Score[1][SCORE_ROUND] = 0;
+    Score_Sub();
+    Disp_Win_Record();
+    Clear_Win_Type();
+    Disp_Win_Type();
+    win_mark_rno[0] = 0;
+    win_mark_control(0);
+    win_mark_rno[1] = 0;
+    win_mark_control(1);
+    set_kizetsu_status(0);
+    set_kizetsu_status(1);
+    set_super_arts_status(0);
+    set_super_arts_status(1);
+    if (Demo_Flag) {
+        spgauge_cont_init();
+    } else {
+        spgauge_cont_demo_init();
+    }
+    spgauge_cont_main();
+    stngauge_cont_init();
+}
+
+
+
+void Game05(void) {
+    Basic_Sub();
+    Setup_Play_Type();
+    switch (G_No2) {
+    case G2_NEXT_INIT:
+        G_No2++;
+        SC_No[0] = SC0_INIT;
+        SC_No[1] = 0;
+        SC_No[2] = 0;
+        SC_No[3] = 0;
+        if (Check_Bonus_Stage()) {
+            SC_No[0] = SC0_BONUS;
+        }
+        Stop_Combo = 0;
+        init_slow_flag();
+        break;
+    case G2_NEXT_MAIN:
+        if (Next_CPU()) {
+            G_No2++;
+            if (Bonus_Type == 0) {
+                Game01_Sub();
+            }
+            sc_vram_to_ram();
+            Switch_Screen_Init(3, 3);
+        }
+        break;
+    default:
+        Next_CPU();
+        if (Switch_Screen()) {
+            Cover_Timer = 24;
+            BGM_Stop();
+            if (Bonus_Type == 0) {
+                G_No1 = G1_FIGHT;
+                G_No2 = G2_FIGHT_INIT;
+                E_No0 = E0_FIGHT;
+                E_No1 = 0;
+                E_No2 = 0;
+                E_No3 = 0;
+                Bonus_Game_Flag = 0;
+            } else {
+                G_No1 = G1_BONUS;
+                G_No2 = G2_BONUS_INIT;
+                G_No3 = 0;
+                E_No0 = E0_FIGHT;
+                E_No1 = 0;
+                E_No2 = 0;
+                E_No3 = 0;
+            }
+        }
+        break;
+    }
+}
+
+
+
+void Game11(void) {
+    Basic_Sub();
+    Setup_Play_Type();
+    switch (G_No2) {
+    case G2_Q_INIT:
+        G_No2++;
+        SC_No[0] = 0;
+        SC_No[1] = 0;
+        SC_No[2] = 0;
+        SC_No[3] = 0;
+        Stop_Combo = 0;
+        Bonus_Type = 0;
+        init_slow_flag();
+        break;
+    case G2_Q_MAIN:
+        if (Next_Q()) {
+            G_No2++;
+            Game01_Sub();
+            sc_vram_to_ram();
+            Switch_Screen_Init(3, 3);
+        }
+        break;
+    case G2_Q_OUT:
+        Next_Q();
+        if (Switch_Screen()) {
+            Cover_Timer = 24;
+            BGM_Stop();
+            if (Bonus_Type == 0) {
+                G_No1 = G1_FIGHT;
+                G_No2 = G2_FIGHT_INIT;
+                E_No0 = E0_FIGHT;
+                E_No1 = 0;
+                E_No2 = 0;
+                E_No3 = 0;
+                Bonus_Game_Flag = 0;
+            } else {
+                G_No1 = G1_BONUS;
+                G_No2 = G2_BONUS_INIT;
+                G_No3 = 0;
+                E_No0 = E0_FIGHT;
+                E_No1 = 0;
+                E_No2 = 0;
+                E_No3 = 0;
+            }
+        }
+        break;
+    case G2_Q_IN:
+        G_No2++;
+        SC_No[0] = 0;
+        SC_No[1] = 0;
+        SC_No[2] = 0;
+        SC_No[3] = 0;
+        Stop_Combo = 0;
+        Bonus_Type = 0;
+        init_slow_flag();
+        sc_vram_to_ram();
+        Switch_Screen_Init(3, 3);
+        break;
+    case G2_Q_IN_WAIT:
+        if (Switch_Screen()) {
+            G_No2 = G2_Q_MAIN;
+            Cover_Timer = 24;
+        }
+        break;
+    }
+}
+
+
+
+void Game02(void) {
+    void (*Game02_Jmp_Tbl[6])() = { Game2_0, Game2_1, Game2_2, Game2_3, Game2_4, Game2_5 };
+    Scene_Cut = Cut_Cut_Cut();
+    Game02_Jmp_Tbl[G_No2]();
+}
+
+
+
+void Game2_0(void) {
+    System_all_clear_Wait();
+    Game_difficulty = 15;
+    Game_timer = 0;
+    Game_pause = 0;
+    Demo_Time_Stop = 0;
+    C_No0 = C0_INIT;
+    C_No1 = 0;
+    C_No2 = 0;
+    C_No3 = 0;
+    G_No2 = G2_FIGHT_START;
+    G_Timer = 10;
+    Stage_Intro_Flag = 0x80;
+    Round_num = 0;
+    Allow_a_battle_f = 0;
+    Time_in_Time = 60;
+    init_slow_flag();
+    effect_work_quick_init();
+    clear_hit_queue();
+    pcon_rno[0] = pcon_rno[1] = pcon_rno[2] = pcon_rno[3] = 0;
+    ca_check_flag = 1;
+    bg_work_clear();
+    win_lose_work_clear();
+    TATE00();
+}
+
+
+
+void Game2_1(void) {
+    Game_timer++;
+    set_EXE_flag();
+    Time_Control();
+    Player_control();
+    vital_cont_main();
+    combo_cont_main();
+    TATE00();
+    Game_Management();
+    win_mark_control(0);
+    win_mark_control(1);
+    move_effect_work(0);
+    move_effect_work(1);
+    move_effect_work(2);
+    move_effect_work(3);
+    move_effect_work(4);
+    move_effect_work(5);
+    move_effect_work(6);
+    hit_check_main_process();
+}
+
+
+
+/* Step 2 of the fight routine (Game02_Jmp_Tbl) has no work. */
+void Game2_2(void) {
+}
+
+
+
+void Game2_3(void) {
+    Game2_1();
+    if (--G_Timer) {
+        return;
+    }
+    G_No2 = G2_FIGHT;
+    Clear_Flash_No();
+}
+
+
+
+void Game2_4(void) {
+    switch (G_No3) {
+    case 0:
+        G_No3++;
+        System_all_clear_Wait();
+        vital_cont_init();
+        stngauge_work_clear();
+        combo_cont_init();
+        count_cont_init(1);
+        Score[0][SCORE_ROUND] = 0;
+        Score[1][SCORE_ROUND] = 0;
+        Score_Sub();
+        win_mark_rno[0] = 0;
+        win_mark_control(0);
+        win_mark_rno[1] = 0;
+        win_mark_control(1);
+        Game_pause = 0;
+        pcon_rno[0] = PCON_INIT;
+        pcon_rno[1] = APP_SETUP;
+        pcon_rno[2] = 0;
+        pcon_rno[3] = 0;
+        appear_type = APPEAR_ROUND;
+        erase_extra_plef_work();
+        bg_work_clear();
+        win_lose_work_clear();
+        if (bg_w.area < 2) {
+            bg_w.area++;
+        }
+        TATE00();
+        break;
+    default:
+        Game2_1();
+        if (--G_Timer == 0) {
+            G_No2 = G2_FIGHT;
+            Clear_Flash_No();
+        }
+        break;
+    }
+}
+
+
+
+void Game2_5(void) {
+    switch (G_No3) {
+    case 0:
+        G_No3++;
+        vital_cont_init();
+        stngauge_work_clear();
+        combo_cont_init();
+        count_cont_init(1);
+        Score[0][SCORE_ROUND] = 0;
+        Score[1][SCORE_ROUND] = 0;
+        Score_Sub();
+        win_mark_rno[0] = 0;
+        win_mark_control(0);
+        win_mark_rno[1] = 0;
+        win_mark_control(1);
+        Suicide[0] = 1;
+        Game_pause = 0;
+        pcon_rno[0] = PCON_INIT;
+        pcon_rno[1] = APP_SETUP;
+        pcon_rno[2] = 0;
+        pcon_rno[3] = 0;
+        appear_type = APPEAR_STAND;
+        erase_extra_plef_work();
+        reset_all_char_display_with_backup();
+        win_lose_work_clear();
+        if (bg_w.area < 2) {
+            bg_w.area++;
+        }
+        TATE00();
+        if (Judge_Round_Flag) {
+            load_bg_color_fade(bg_palette_no_tbl[bg_w.bg_index], 31, 31, 31);
+            load_bg_color_fade(bg_color2_tbl[bg_w.bg_index], 31, 31, 31);
+        }
+        break;
+    default:
+        Game2_1();
+        if (--G_Timer == 0) {
+            G_No2 = G2_FIGHT;
+            Clear_Flash_No();
+        }
+        break;
+    }
+}
+
+/* The winner scene: runs Winner_Scene, then wipes out to the winner's next stage, or to game over in event
+   mode. */
+void Game03(void) {
+    move_effect_work(4);
+    move_effect_work(5);
+    switch (G_No2) {
+    case 0:
+        if (Winner_Scene() == 0) {
+            return;
+        }
+        if (Check_Short_Ending()) {
+            Forbid_Break = 1;
+            break;
+        }
+        if (Game_setting.Event) {
+            G_No1 = G1_GAME_OVER;
+            G_No2 = G2_OVER_INIT;
+            G_No3 = 0;
+            E_No0 = E0_GAME_OVER;
+            E_No1 = 0;
+            E_No2 = 0;
+            E_No3 = 0;
+        } else {
+            G_No1 = G1_NEXT_CPU;
+            G_No2 = G2_NEXT_INIT;
+            G_No3 = 0;
+            E_No0 = E0_NEXT_CPU;
+            E_No1 = 0;
+            E_No2 = 0;
+            E_No3 = 0;
+            if (Battle_Q[WINNER]) {
+                G_No1 = G1_NEXT_Q;
+                G_No2 = G2_Q_IN;
+                G_No3 = 0;
+            }
+            Cover_Timer = 24;
+            if (Continue_Flag == 0) {
+                break;
+            }
+            if (Round_Operator[LOSER]) {
+                E_Number[LOSER][0] = ENTRY_CONTINUE;
+                E_Number[LOSER][1] = 0;
+                E_Number[LOSER][2] = 0;
+                E_Number[LOSER][3] = 0;
+            }
+        }
+        break;
+    }
+}
+
+
+
+void Game04(void) {
+    move_effect_work(4);
+    move_effect_work(5);
+    switch (G_No2) {
+    case 0:
+        if (Loser_Scene()) {
+            if (Continue_Flag) {
+                G_No1 = G1_CONTINUE;
+                G_No2 = 0;
+                G_No3 = 0;
+                E_No0 = E0_CONTINUE;
+                E_No1 = 0;
+                E_No2 = 0;
+                E_No3 = 0;
+                Cont_No = 0;
+                Cont_Sub_No = 0;
+                Cont_Sub2_No = 0;
+                Cont_Sub3_No = 0;
+                E_Number[LOSER][0] = ENTRY_CONTINUE;
+                E_Number[LOSER][1] = 0;
+                E_Number[LOSER][2] = 0;
+                E_Number[LOSER][3] = 0;
+            } else {
+                G_No1 = G1_GAME_OVER;
+                G_No2 = G2_OVER_INIT;
+                G_No3 = 0;
+                E_No0 = E0_GAME_OVER;
+                E_No1 = 0;
+                E_No2 = 0;
+                E_No3 = 0;
+            }
+        }
+        break;
+    }
+}
+
+
+
+void Game09(void) {
+    switch (G_No2) {
+    case G2_BONUS_INIT:
+        System_all_clear_Wait();
+        Bonus_Game_Flag = Bonus_Type;
+        Game_difficulty = 15;
+        Game_timer = 0;
+        Game_pause = 0;
+        Demo_Time_Stop = 0;
+        C_No0 = C0_INIT;
+        C_No1 = 0;
+        C_No2 = 0;
+        C_No3 = 0;
+        G_No2++;
+        Round_num = 0;
+        Allow_a_battle_f = 0;
+        Time_in_Time = 60;
+        init_slow_flag();
+        effect_work_quick_init();
+        clear_hit_queue();
+        pcon_rno[0] = pcon_rno[1] = pcon_rno[2] = pcon_rno[3] = 0;
+        bbbs_com_initialize();
+        ca_check_flag = 1;
+        Bonus_Game_Work = 20;
+        Bonus_Game_result = 0;
+        Bonus_Game_ex_result = 0;
+        bg_work_clear();
+        win_lose_work_clear();
+        bg_w.stage = Bonus_Type;
+        bg_w.area = 0;
+        if (Bonus_Game_Flag == BONUS_PARRY) {
+            My_char[COM_id] = PL_SEAN;
+        } else {
+            My_char[COM_id] = My_char[Player_id];
+        }
+        Setup_Com_Color();
+        Setup_PL_Color(COM_id, Com_Color_Shot);
+        TATE00();
+        break;
+    case G2_BONUS_START:
+        G_No2++;
+        G_Timer = 19;
+        if (Bonus_Type == BONUS_PARRY) {
+            makeup_bonus_game_level(COM_id);
+            effect_35_init(60, 5);
+            effect_J2_init(120);
+            effect_35_init(180, 7);
+            effect_58_init(6, 180, 161);
+        } else {
+            effect_35_init(60, 6);
+            effect_35_init(120, 7);
+            effect_58_init(6, 120, 161);
+        }
+        break;
+    case G2_BONUS_INTRO:
+        Bonus_Sub();
+        if (--G_Timer == 0) {
+            G_No2++;
+            Clear_Flash_No();
+            Text_Page_Y = 0;
+            Scrn_Move_Set(4, 0, 0);
+            Switch_Screen_Init(0, 1);
+        }
+        break;
+    case G2_BONUS_REVIVAL:
+        Bonus_Sub();
+        if (Switch_Screen_Revival()) {
+            G_No2++;
+            Forbid_Break = 0;
+        }
+        break;
+    case G2_BONUS_PLAY:
+        if (Bonus_Sub()) {
+            G_No2++;
+            Cover_Timer = 24;
+            sc_vram_to_ram();
+            Stop_Combo = 1;
+            Switch_Screen_Init(3, 3);
+        }
+        break;
+    case G2_BONUS_OUT:
+        Bonus_Sub();
+        if (Switch_Screen()) {
+            effect_work_quick_init();
+            SE_All_Off();
+            Clear_Flash_No();
+            Cover_Timer = 24;
+            Suicide[0] = 1;
+            System_all_clear_Wait();
+            tilemap_fill_all(0, 32);
+            G_No1 = G1_AFTER_BONUS;
+            G_No2 = G2_AFTER_INIT;
+            G_No3 = 0;
+            E_No0 = E0_NEXT_CPU;
+            E_No1 = 0;
+            E_No2 = 0;
+            E_No3 = 0;
+            load_any_color(2);
+        }
+        break;
+    }
+}
+
+
+
+s32 Bonus_Sub(void) {
+    s16 result;
+    Scene_Cut = Cut_Cut_Cut();
+    Bonus_Game_Complete = 0;
+    Game_timer++;
+    set_EXE_flag();
+    Time_Control();
+    if (Bonus_Type == BONUS_PARRY) {
+        Bonus_Game_Complete = Player_control_bonus();
+    } else {
+        Bonus_Game_Complete = Player_control_bonus2();
+    }
+    TATE00();
+    result = Game_Management();
+    move_effect_work(0);
+    move_effect_work(1);
+    move_effect_work(2);
+    move_effect_work(3);
+    move_effect_work(4);
+    move_effect_work(5);
+    move_effect_work(6);
+    hit_check_main_process();
+    return result;
+}
+
+
+
+void Game10(void) {
+    Basic_Sub();
+    Setup_Play_Type();
+    switch (G_No2) {
+    case G2_AFTER_INIT:
+        G_No2++;
+        SC_No[0] = 0;
+        SC_No[1] = 0;
+        SC_No[2] = 0;
+        SC_No[3] = 0;
+        Stop_Combo = 0;
+        init_slow_flag();
+        break;
+    case G2_AFTER_MAIN:
+        if (After_Bonus()) {
+            G_No2++;
+            load_any_color(2);
+            Game01_Sub();
+            sc_vram_to_ram();
+            Switch_Screen_Init(3, 3);
+        }
+        break;
+    default:
+        if (After_Bonus() && Switch_Screen()) {
+            Cover_Timer = 24;
+            BGM_Stop();
+            G_No1 = G1_FIGHT;
+            G_No2 = G2_FIGHT_INIT;
+            E_No0 = E0_FIGHT;
+            E_No1 = 0;
+            E_No2 = 0;
+            E_No3 = 0;
+            Bonus_Game_Flag = 0;
+        }
+        break;
+    }
+}
+
+
+
+void Game08(void) {
+    switch (G_No2) {
+    case G2_END_INIT:
+        G_No2 = G2_END_MAIN;
+        Final_Result_id = WINNER;
+        WGJ_Target = WINNER;
+        WGJ_Win = Win_Record[WINNER];
+        grade_final_grade_bonus();
+        WGJ_Score = Score[WINNER][SCORE_CPU] + Continue_Coin[WINNER];
+        break;
+    case G2_END_MAIN:
+        if (Ending_main(End_PL) && Request_Fade(107, 0)) {
+            G_No2++;
+        }
+        break;
+    case G2_END_FADE:
+        if (Check_Fade_Complete_SP()) {
+            G_No2++;
+            G_Timer = 10;
+            Suicide[4] = 1;
+        }
+        break;
+    case G2_END_EXIT:
+        if (--G_Timer == 0) {
+            G_No1 = G1_GAME_OVER;
+            G_No2 = G2_OVER_INIT;
+            E_No0 = E0_GAME_OVER;
+            E_No1 = 0;
+            E_No2 = 0;
+            E_No3 = 0;
+            Clear_Personal_Data(0);
+            Clear_Personal_Data(1);
+            plw[0].wu.operator = 0;
+            plw[1].wu.operator = 0;
+            Operator_Status[0] = 0;
+            Operator_Status[1] = 0;
+            Last_Player_id = Player_Number = -1;
+            load_any_color(2);
+            load_any_color(5);
+        }
+        break;
+    case G2_END_SHORT:
+        if (Short_Ending_Scene()) {
+            G_No1 = G1_GAME_OVER;
+            G_No2 = G2_OVER_INIT;
+            E_No0 = E0_GAME_OVER;
+            E_No1 = 0;
+            E_No2 = 0;
+            E_No3 = 0;
+            Clear_Personal_Data(WINNER);
+            plw[WINNER].wu.operator = 0;
+            Operator_Status[WINNER] = 0;
+            Last_Player_id = Player_Number = -1;
+        }
+        break;
+    }
+    move_effect_work(4);
+}
+
+
+
+void Game06(void) {
+    s16 xx;
+    Basic_Sub_Ex();
+    if (Break_Into) {
+        return;
+    }
+    switch (G_No2) {
+    case G2_OVER_INIT:
+        G_No2++;
+        Stock_Com_Color[Player_id] = -1;
+        Stock_Com_Arts[Player_id] = -1;
+        Last_Player_id = -1;
+        Control_Time = 481;
+        E_No0 = E0_GAME_OVER;
+        E_No1 = 0;
+        E_No2 = 0;
+        E_No3 = 0;
+        for (xx = 0; xx < 4; xx++) {
+            GO_No[xx] = 0;
+        }
+        break;
+    case G2_OVER_MAIN:
+        if (Game_Over()) {
+            G_Timer = 60;
+            if (Check_Disp_Ranking() != 0) {
+                G_No2++;
+            } else {
+                G_No2 = G2_OVER_EXIT;
+            }
+        }
+        break;
+    case G2_OVER_RANKING:
+        if (Disp_Ranking()) {
+            G_No2++;
+            G_Timer = 1;
+        }
+        break;
+    case G2_OVER_EXIT:
+        if (--G_Timer == 0) {
+            G_No2++;
+            Clear_Disp_Ranking(0);
+            Clear_Disp_Ranking(1);
+            sc_vram_to_ram();
+            Switch_Screen_Init(0, 1);
+        }
+        break;
+    case G2_OVER_OUT:
+        if (Switch_Screen()) {
+            Cover_Timer = 24;
+            Forbid_Break = 0;
+            Clear_Flash_No();
+            Clear_Personal_Data(LOSER);
+            grade_check_work_1st_init(LOSER, 0);
+            grade_check_work_1st_init(LOSER, 1);
+            scfont_page0_fill(0, 32);
+            if (Request_Break[0] != 0 || Request_Break[1] != 0) {
+                Request_Break_Sub(0);
+                Request_Break_Sub(1);
+                G_No1 = G1_SELECT;
+                G_No2 = G2_SEL_INIT;
+                G_No3 = 0;
+                E_No0 = E0_SELECT;
+                E_No1 = 0;
+                E_No2 = 0;
+                E_No3 = 0;
+                break;
+            }
+            G_No0 = G0_DEMO;
+            G_No1 = G1_DEMO_RESTART;
+            G_No2 = 0;
+            G_No3 = 0;
+            E_No0 = E0_DEMO;
+            E_No1 = 99;
+            E_No2 = 0;
+            E_No3 = 0;
+            D_No0 = 0;
+            D_No1 = 0;
+            D_No2 = 0;
+            D_No3 = 0;
+            Get_Demo_Index = 0;
+            Combo_Demo_Flag = 0;
+            System_all_clear_Wait();
+        }
+        break;
+    case G2_OVER_PL_INIT:
+        G_No2++;
+        Stock_Com_Color[Player_id] = -1;
+        Stock_Com_Arts[Player_id] = -1;
+        Last_Player_id = -1;
+        Clear_Personal_Data(Player_id);
+        plw[Player_id].wu.operator = 0;
+        Operator_Status[Player_id] = 0;
+        grade_check_work_1st_init(Player_id, 0);
+        grade_check_work_1st_init(Player_id, 1);
+        Control_Time = 481;
+        E_No0 = E0_GAME_OVER;
+        E_No1 = 0;
+        E_No2 = 0;
+        E_No3 = 0;
+        GO_No[0] = GO_DONE;
+        GO_No[1] = 1;
+        break;
+    case G2_OVER_PL:
+        if (Game_Over()) {
+            G_No2 = G2_OVER_RANKING;
+            G_Timer = 60;
+        }
+        break;
+    }
+}
+
+
+
+s32 Check_Disp_Ranking(void) {
+    s16 rank_type;
+    if (Version_Type == 3) {
+        return 0;
+    }
+    rank_type = Disp_Rank_Sub(0);
+    if (rank_type != -1) {
+        Rank_Type = rank_type;
+        Present_Rank[0] = Rank_In[0][rank_type];
+        Present_Rank[1] = Rank_In[1][rank_type];
+        return 1;
+    }
+    rank_type = Disp_Rank_Sub(1);
+    if (rank_type != -1) {
+        Rank_Type = rank_type;
+        Present_Rank[1] = Rank_In[1][rank_type];
+        return 1;
+    }
+    return 0;
+}
+
+
+
+s16 Disp_Rank_Sub(s16 PL_id) {
+    if (Request_Disp_Rank[PL_id][RANK_GRADE] >= 0) {
+        return 15;
+    }
+    if (Request_Disp_Rank[PL_id][RANK_CPU_GRADE] >= 0) {
+        return 10;
+    }
+    if (Request_Disp_Rank[PL_id][RANK_WINS] >= 0) {
+        return 5;
+    }
+    if (Request_Disp_Rank[PL_id][RANK_SCORE] >= 0) {
+        return 0;
+    }
+    return -1;
+}
+
+
+
+/* provisional name */
+s32 Check_Disp_Rank_Request(void) {
+    if (Request_Disp_Rank[0][RANK_SCORE] >= 0 || Request_Disp_Rank[0][RANK_WINS] >= 0) {
+        return 1;
+    }
+    if (Request_Disp_Rank[1][RANK_SCORE] >= 0 || Request_Disp_Rank[1][RANK_WINS] >= 0) {
+        return 1;
+    }
+    return 0;
+}
+
+
+
+/* Puts a waiting break-in request (Request_Break) through Ck_Break_Into, making the player an operator. */
+void Request_Break_Sub(PL_id)
+s16 PL_id;
+{
+    if (Request_Break[PL_id] && Ck_Break_Into(0, 0, PL_id)) {
+        plw[PL_id].wu.operator = 1;
+        Operator_Status[PL_id] = 1;
+    }
+}
+
+
+
+s32 Disp_Ranking(void) {
+    switch (G_No3) {
+    case G3_RANK_INIT:
+        G_No3++;
+        sc_vram_to_ram();
+        Switch_Screen_Init(0, 0);
+        break;
+    case G3_RANK_SETUP:
+        if (Switch_Screen()) {
+            Cover_Timer = 24;
+            G_No3++;
+            D_No0 = 1;
+            D_No1 = 0;
+            D_No2 = 0;
+            D_No3 = 0;
+            Clear_Personal_Data(0);
+            grade_check_work_1st_init(0, 0);
+            grade_check_work_1st_init(0, 1);
+            Clear_Personal_Data(1);
+            grade_check_work_1st_init(1, 0);
+            grade_check_work_1st_init(1, 1);
+        }
+        break;
+    case G3_RANK_COVER:
+        Ranking();
+        if (--Cover_Timer == 0) {
+            G_No3++;
+            Switch_Screen_Init(0, 0);
+        }
+        break;
+    case G3_RANK_REVIVAL:
+        Ranking();
+        if (Switch_Screen_Revival() != 0) {
+            G_No3++;
+            Forbid_Break = 0;
+            BGM_Request(7);
+        }
+        break;
+    default:
+        if (Ranking() != 0) {
+            BGM_Stop();
+            return 1;
+        }
+        break;
+    }
+    return 0;
+}
+
+
+
+void Game07(void) {
+    Basic_Sub();
+    switch (G_No2) {
+    case 0:
+        if (Continue_Scene() != 0) {
+            G_No1 = G1_GAME_OVER;
+            G_No2 = G2_OVER_INIT;
+        }
+        break;
+    }
+}
+
+
+
+/* provisional name */
+void Game_Dummy(void) {
+}
+
+
+
+void Time_Control(void) {
+    if (Allow_a_battle_f != 0 && Demo_Time_Stop == 0 && Bonus_Game_Flag == 0) {
+        count_cont_main();
+        if (Control_Time >= Limit_Time) {
+            Control_Time = Limit_Time;
+        } else if (--Time_in_Time == 0) {
+            Time_in_Time = 60;
+            Control_Time++;
+        }
+    }
+}
+
+
+s32 Ck_Coin(void) {
+    s16 pl;
+    if (Free_Play) {
+        pl = -1;
+        if (~p1sw_1 & p1sw_0 & BUTTON_START) {
+            pl = 0;
+        } else if (~p2sw_1 & p2sw_0 & BUTTON_START) {
+            pl = 1;
+        }
+        if (pl == -1) {
+            return 0;
+        }
+        bg_vbl_trans_flag = 0;
+        bookkeep_freeplay_count();
+        if (Game_setting.Event) {
+            plw[0].wu.operator = 1;
+            plw[1].wu.operator = 1;
+            Operator_Status[0] = 1;
+            Operator_Status[1] = 1;
+            return 1;
+        } else {
+            plw[pl].wu.operator = 1;
+            Operator_Status[pl] = 1;
+            Champion = pl;
+            plw[pl ^ 1].wu.operator = 0;
+            Operator_Status[pl ^ 1] = 0;
+            return 1;
+        }
+    }
+    if (coin_chute1_w.dropped | coin_chute2_w.dropped) {
+        return 1;
+    }
+    return coin_chute1_w.count | coin_chute2_w.count | credit_1p | credit_2p;
+}
+
+
+
+/* provisional name */
+void draw_operator_info(s32 y) {
+    if (Country == 6 || Country == 5) {
+        if (p1sw_0 & BUTTON_LP) {
+            tilemap_print_string_attr(DE_X[18] + 36, y + 20, 18, Game_Data_msg);
+            tilemap_print_string_attr(DE_X[18] + 31, y + 21, 18, Income_msg);
+            tilemap_print_string_attr(DE_X[18] + 31, y + 22, 18, Service_msg);
+            tilemap_print_string_attr(DE_X[18] + 31, y + 23, 18, Card_msg);
+            tilemap_print_hex_block(DE_X[18] + 41, y + 21, 18, hex_to_bcd(*(s32*)&book_coin_count), 6, 0);
+            tilemap_print_hex_block(DE_X[18] + 41, y + 22, 18, hex_to_bcd(*(s32*)&book_service_count), 6, 0);
+            tilemap_print_hex_block(DE_X[18] + 41, y + 23, 18, hex_to_bcd(*(s32*)&book_card_count), 6, 0);
+        } else {
+            tilemap_clear_rect(DE_X[18] + 31, y + 20, DE_X[18] + 49, y + 23);
+        }
+    }
+}

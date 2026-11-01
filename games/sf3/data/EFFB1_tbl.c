@@ -1,0 +1,31 @@
+/*
+ * EFFB1_TBL.C  blocking bonus stage result marks
+ *
+ * bbbs_blocking gives the position and character of each of the 20 marks for each layout, and
+ * bbbs_clear the cleared state of a mark, read by EFFB1_INIT.C. effB1_wait_table and
+ * effB1_wait_tbl_2 are the frame times of the mark's appear and exchange animations, read by
+ * EFFB1.C, the bonus-stage result marks.
+ */
+
+#include "types.h"
+#include "structs.h"
+
+#pragma section TBL
+
+
+const s16 effB1_wait_table[4] = {
+    2, 2, 2, 2,
+};
+
+const s16 effB1_wait_tbl_2[4] = {
+    2, 2, 2, 2,
+};
+
+const CONN bbbs_clear[1] = {
+    { 0, 0, 2, 0x24 },
+};
+
+const CONN bbbs_blocking[2][20] = {
+    { { -172, -12, 0, 0xB32C }, { -154, -12, 0, 0xB32C }, { -136, -12, 0, 0xB32C }, { -118, -12, 0, 0xB32C }, { -100, -12, 0, 0xB32C }, { -82, -12, 0, 0xB32C }, { -64, -12, 0, 0xB32C }, { -46, -12, 0, 0xB32C }, { -28, -12, 0, 0xB32C }, { -10, -12, 0, 0xB32C }, { -172, 4, 0, 0xB32C }, { -154, 4, 0, 0xB32C }, { -136, 4, 0, 0xB32C }, { -118, 4, 0, 0xB32C }, { -100, 4, 0, 0xB32C }, { -82, 4, 0, 0xB32C }, { -172, 20, 0, 0xB32C }, { -154, 20, 0, 0xB32C }, { -136, 20, 0, 0xB32C }, { -172, 36, 0, 0xB32C } },
+    { { -228, -12, 0, 0xB32C }, { -204, -12, 0, 0xB32C }, { -180, -12, 0, 0xB32C }, { -156, -12, 0, 0xB32C }, { -132, -12, 0, 0xB32C }, { -108, -12, 0, 0xB32C }, { -84, -12, 0, 0xB32C }, { -60, -12, 0, 0xB32C }, { -36, -12, 0, 0xB32C }, { -12, -12, 0, 0xB32C }, { -228, 4, 0, 0xB32C }, { -204, 4, 0, 0xB32C }, { -180, 4, 0, 0xB32C }, { -156, 4, 0, 0xB32C }, { -132, 4, 0, 0xB32C }, { -108, 4, 0, 0xB32C }, { -228, 20, 0, 0xB32C }, { -204, 20, 0, 0xB32C }, { -180, 20, 0, 0xB32C }, { -228, 36, 0, 0xB32C } },
+};

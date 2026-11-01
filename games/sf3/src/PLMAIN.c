@@ -1,0 +1,764 @@
+/*
+ * PLMAIN.C  Player move routine for a fight
+ *
+ * Player_move (called from player control) is the per-frame routine of a player work. It takes
+ * the lever and buttons from the operator, the CPU (CPU_Sub) or the demo input, saves the
+ * previous state, runs the command check (waza_check) and dispatches on routine_no[0]:
+ * player_mv_0000 initialises the player (vitality, shadow, stun, super-art state), player_mv_1000
+ * runs the entry and gauge setup, player_mv_2000 waits for the entry pose, and player_mv_4000
+ * runs the game routines with lever checks, hit stop (check_hit_stop, select_hit_stop) and
+ * timers (look_after_timers).
+ * The super-art gauge processes sag_normal, sag_timer and sag_rebirth handle stock, timed and
+ * rebirth type arts.
+ */
+
+#include "structs.h"
+#include "work.h"
+#include "romdata.h"
+#include "extern.h"
+#include "Com_Pl.h"
+#include "PLS01.h"
+#include "PLPNM.h"
+#include "appear.h"
+#include "CALDIR.h"
+#include "CHARMOVE.h"
+#include "charmove_2.h"
+#include "PLS00.h"
+#include "PLCNTDAT.h"
+#include "plcntdat_2.h"
+#include "SYS_sub.h"
+#include "EFFECT.h"
+#include "effect_2.h"
+#include "bg_sub.h"
+#include "bg_sub_2.h"
+#include "bg_sub_3.h"
+#include "bg_sub_4.h"
+#include "bg_sub_5.h"
+#include "win_pl.h"
+#include "CMD_MAIN.h"
+#include "cmd_main_2.h"
+#include "ta_sub.h"
+#include "PLSGAUGE.h"
+#include "EFFG3.h"
+#include "PLMAIN.h"
+#include "fighter.h"
+#include "Manage.h"
+#include "manage_2.h"
+#include "PLCNTSET.h"
+#include "plcntset_2.h"
+#include "PLS02.h"
+#include "PLCNT2.h"
+#include "aboutspr.h"
+#include "HITCHECK.h"
+#include "PLCNT3.h"
+
+/* sa->sa_rno: the super art stock (sag_normal, sag_timer, sag_rebirth) */
+#define SA_NONE         0       /* no stock */
+#define SA_READY        1       /* a stock is ready (ok) */
+#define SA_USED         2       /* the art was started: spend the stock once it takes */
+#define SA_TIMER_WAIT   3       /* sag_timer: it took, wait out the freeze */
+#define SA_TIMER_RUN    4       /* sag_timer: the gauge runs down */
+#define SA_REBIRTH      3       /* sag_rebirth: it took */
+
+/* sa->mp_rno: the full gauge (mpg_union) */
+#define MP_NONE         0       /* the gauge is not full */
+#define MP_FULL         1       /* the gauge is full (mp) */
+#define MP_USED         2       /* a full-gauge attack was started */
+
+/* sa->ex_rno: the EX gauge (eag_union) */
+#define EX_NONE         0       /* not enough gauge for an EX move */
+#define EX_READY        1       /* enough for an EX move (ex) */
+#define EX_USED         2       /* an EX move was started: take its gauge */
+
+void Player_move(PLW* wk, u16 lv_data) {
+    s16 i;
+    if (Demo_Lever_Play != 0xFF) {
+        if (wk->wu.operator) {
+            wk->cp->sw_lvbt = lv_data;
+        } else {
+            wk->cp->sw_lvbt = processed_lvbt(CPU_Sub(wk));
+        }
+        if (wk->metamor_over) {
+            wk->cp->sw_lvbt = 0;
+        }
+    } else {
+        wk->cp->sw_lvbt = processed_lvbt(cpu_algorithm(wk->wu.id));
+    }
+    if (wk->dead_flag) {
+        wk->cp->sw_lvbt = 0;
+    }
+    if (wk->wkey_flag) {
+        wk->cp->sw_lvbt = 0;
+    }
+    if ((wk->dead_flag + wk->wkey_flag) == 0) {
+        wk->hurimukenai_flag = 0;
+    }
+    for (i = 0; i < 8; i++) {
+        wk->wu.old_rno[i] = wk->wu.routine_no[i];
+    }
+    for (i = 0; i < 3; i++) {
+        wk->wu.old_pos[i] = wk->wu.xyz[i].disp.pos;
+    }
+    get_saikinnno_idouryou(wk);
+    wk->old_gdflag = wk->guard_flag;
+    wk->wu.renew_attack = 0;
+    wk->wu.vital_old = wk->wu.vital_new;
+    if (wk->sa_stop_flag != 1) {
+        waza_check(wk);
+    } else {
+        key_thru(wk);
+    }
+    wk->wu.cmwk[10] = wk->cp->lgp;
+    wk->wu.cmwk[11] += wk->cp->lgp;
+    wk->wu.cmwk[11] &= 0x7FFF;
+    wk->wu.cmwk[12] = wk->cp->sw_new;
+    wk->wu.cmwk[13] = wk->cp->sw_now;
+    plmain_lv_00[wk->wu.routine_no[0]](wk);
+}
+
+
+
+void player_mv_0000(PLW* wk) {
+    s16 i;
+    for (i = 0; i < 8; i++) {
+        wk->old_pos_data[i] = 0;
+    }
+    setup_vitality(&wk->wu, wk->player_number);
+    set_player_shadow(wk);
+    wk->bullet_hcnt = wk->bhcnt_timer = 0;
+    wk->auto_guard = 0;
+    wk->wu.hit_stop = wk->wu.dm_stop = 0;
+    wk->wu.hit_quake = wk->wu.dm_quake = 0;
+    wk->tsukamarenai_flag = 0;
+    wk->zuru_timer = 0;
+    wk->zuru_flag = 0;
+    wk->tsukami_f = wk->tsukamare_f = 0;
+    clear_kizetsu_point(wk);
+    poison_flag[wk->wu.id] = 0;
+    wk->ukemi_ok_timer = 0;
+    wk->uot_cd_ok_flag = 0;
+    wk->ukemi_success = 0;
+    clear_my_shell_ix(&wk->wu);
+    wk->sa->mp_rno = MP_NONE;
+    wk->sa->mp = 0;
+    wk->sa->sa_rno = SA_NONE;
+    wk->sa->ok = 0;
+    wk->sa->ex_rno = EX_NONE;
+    wk->sa->ex = 0;
+    wk->metamorphose = 0;
+    wk->metamor_over = 0;
+    wk->sa_healing = 0;
+    wk->dm_hos_flag = 0;
+    wk->kezurijini_flag = 0;
+    wk->wu.spr.floor = 0;
+    wk->bs2_area_car = 0;
+    wk->bs2_over_car = 0;
+    wk->bs2_on_car = 0;
+    wk->wu.extra_col = wk->wu.extra_col_2 = 0;
+    wk->sa_stop_flag = 0;
+    clear_tk_flags(wk);
+    wk->wu.routine_no[0] = PLAYER_MV_PLACE;
+    if (wk->player_number == PL_ELENA) {
+        effect_G1_init(wk);
+    }
+    wk->wu.routine_no[6] = 0;
+    wk->wu.cmwk[0] = 0;
+    about_gauge_process(wk);
+}
+
+
+
+void player_mv_1000(PLW* wk) {
+    switch (appear_type) {
+    case APPEAR_STAND:
+        plmv_1010(wk);
+        if (Combo_Demo_Flag == 0) {
+            plmv_1020(wk, 0x58);
+        } else {
+            set_super_arts_status(wk->wu.id);
+            demo_set_sa_full(wk->sa);
+        }
+        Appear_end++;
+        break;
+    case APPEAR_JUDGE:
+        plmv_1010(wk);
+        plmv_1020(wk, 0x80);
+        break;
+    case APPEAR_ENTRY:
+    case APPEAR_ROUND:
+        wk->wu.routine_no[0] = PLAYER_MV_APPEAR;
+        wk->wu.routine_no[1] = PLAYER_NORMAL;
+        wk->wu.routine_no[2] = NORMAL_APPEAR;
+        wk->wu.routine_no[3] = RN3_START;
+        if (Combo_Demo_Flag == 0) {
+            wk->wu.disp_flag = 1;
+        }
+        appear_data_init_set(wk);
+        break;
+    }
+    Player_normal(wk);
+}
+
+
+void plmv_1010(PLW* wk) {
+    wk->wu.routine_no[0] = PLAYER_MV_READY;
+    wk->wu.routine_no[1] = PLAYER_NORMAL;
+    wk->wu.routine_no[2] = NORMAL_STAND;
+    wk->wu.routine_no[3] = RN3_START;
+    if (Combo_Demo_Flag == 0) {
+        wk->wu.disp_flag = 1;
+    }
+}
+
+
+
+void plmv_1020(PLW* wk, s16 step) {
+    if (wk->wu.id) {
+        wk->wu.rl_flag = 0;
+        wk->wu.xyz[0].disp.pos = step + get_center_position();
+        wk->wu.xyz[1].disp.pos = 0;
+    } else {
+        wk->wu.rl_flag = 1;
+        wk->wu.xyz[0].disp.pos = get_center_position() - step;
+        wk->wu.xyz[1].disp.pos = 0;
+    }
+}
+
+
+
+void player_mv_2000(PLW* wk) {
+    if (wk->wu.routine_no[2] == NORMAL_STAND) {
+        wk->wu.routine_no[0] = PLAYER_MV_READY;
+        if (Combo_Demo_Flag == 0) {
+            wk->wu.disp_flag = 1;
+        }
+        wk->wu.cg_type = 0;
+    }
+    Player_normal(wk);
+}
+
+/* Called with the PLW* in R4; both branches tail-jump with R4 untouched, handing it on. */
+#ifdef HOST_PORT
+void player_mv_3000(PLW* wk) {
+    if (gouki_app) {
+        jijii_nebukuro(wk);
+    } else {
+        Player_normal(wk);
+    }
+}
+#else
+void player_mv_3000(void) {
+    if (gouki_app) {
+        jijii_nebukuro();
+    } else {
+        Player_normal();
+    }
+}
+#endif
+
+
+
+void player_mv_4000(PLW* wk) {
+    wk->permited_koa = 0;
+    check_extra_jump_timer(wk);
+    if (wk->sa_stop_flag != 1) {
+        check_lever_data(wk);
+    }
+    if (wk->tsukamare_f) {
+        wk->wu.hit_stop = wk->wu.dm_stop = 0;
+    }
+    if (check_hit_stop(wk) != 0) {
+    } else {
+        plmain_lv_02[wk->wu.routine_no[1]](wk);
+        if (Timer_Freeze == 0 && wk->wu.hit_stop == 0 && wk->zuru_timer > 0) {
+            wk->zuru_timer -= 2;
+        }
+        if (wk->zuru_timer < 0) {
+            wk->zuru_flag = 1;
+        } else {
+            wk->zuru_flag = 0;
+        }
+    }
+    if (Timer_Freeze == 0) {
+        look_after_timers(wk);
+    }
+    about_gauge_process(wk);
+}
+
+
+
+s32 check_hit_stop(PLW* wk) {
+    WORK* emwk = (WORK*)wk->wu.target_adrs;
+    s16 num = 0;
+    if (wk->wu.dm_stop != 0 && wk->wu.hit_stop != 0) {
+        if (wk->wu.routine_no[3] != RN3_START) {
+            wk->wu.hit_stop = select_hit_stop(wk->wu.hit_stop, wk->wu.dm_stop);
+            wk->wu.dm_stop = 0;
+        } else {
+            wk->wu.dm_stop = select_hit_stop(wk->wu.dm_stop, wk->wu.hit_stop);
+            wk->wu.hit_stop = 0;
+            return 0;
+        }
+    }
+    if (wk->wu.hit_stop) {
+        num = 1;
+        if (wk->wu.hit_stop > 0) {
+            wk->wu.hit_stop--;
+            if (wk->sa_stop_flag == 2) {
+                if (wk->just_sa_stop_timer == Game_timer) {
+                    wk->wu.hit_stop++;
+                }
+                if (wk->wu.hit_stop <= wk->sa_stop_sai) {
+                    wk->sa_stop_lvdir = wk->cp->sw_lvbt;
+                    wk->sa_stop_flag = 1;
+                }
+            }
+        } else {
+            wk->wu.hit_stop++;
+            char_move(&wk->wu);
+        }
+        if (wk->wu.routine_no[3] == RN3_START) {
+            if (wk->wu.routine_no[1] == PLAYER_DAMAGE || wk->wu.routine_no[1] == PLAYER_CAUGHT) {
+                if (emwk->routine_no[1] != PLAYER_DAMAGE && emwk->routine_no[1] != PLAYER_CAUGHT) {
+                    num = 0;
+                }
+            }
+        }
+        if (wk->wu.hit_stop == 0 && wk->hsjp_ok != 0) {
+            char_move_cmhs(wk);
+        }
+    }
+    if (wk->sa_stop_flag) {
+        Timer_Freeze = 1;
+    }
+    return num;
+}
+
+
+
+s32 select_hit_stop(s16 ms, s16 sb) {
+    s8 maf = 0;
+    if (ms < 0) {
+        ms = -ms;
+        maf = 1;
+    }
+    if (sb < 0) {
+        sb = -sb;
+    }
+    if (ms < sb) {
+        ms = sb;
+    }
+    if (maf) {
+        ms = -ms;
+    }
+    return ms;
+}
+
+
+
+void look_after_timers(PLW* wk) {
+    if (wk->tsukamarenai_flag) {
+        wk->tsukamarenai_flag--;
+    }
+    if (wk->cat_break_ok_timer) {
+        wk->cat_break_ok_timer--;
+    }
+    if (wk->uot_cd_ok_flag) {
+        wk->ukemi_ok_timer--;
+        if (wk->ukemi_ok_timer <= 0) {
+            wk->ukemi_ok_timer = 0;
+            wk->uot_cd_ok_flag = 0;
+            wk->ukemi_success = 0;
+        } else if (check_ukemi_flag(wk)) {
+            wk->ukemi_ok_timer = 0;
+            wk->uot_cd_ok_flag = 0;
+            wk->ukemi_success = 1;
+        }
+    }
+    if (wk->bullet_hcnt) {
+        if (--wk->bhcnt_timer <= 0) {
+            wk->bullet_hcnt = 0;
+        }
+    }
+    if (wk->py->now.quantity.h && (wk->wu.hit_stop == 0)) {
+        wk->py->now.timer -= wk->py->recover;
+        if (wk->py->now.quantity.h <= 0) {
+            wk->py->now.timer = 0;
+        }
+    }
+}
+
+void about_gauge_process(PLW* wk) {
+    eag_union(wk);
+    sag_jmp_tbl[wk->sa->gauge_type](wk);
+    mpg_union(wk);
+}
+
+void mpg_union(wk)
+PLW* wk;
+{
+    switch (wk->sa->mp_rno) {
+    case MP_NONE:
+        if (wk->sa->store == wk->sa->store_max) {
+            wk->sa->mp_rno = MP_FULL;
+            wk->sa->mp = 1;
+        }
+        wk->sa->saeff_mp = 0;
+        break;
+    case MP_FULL:
+        if (wk->sa->store < wk->sa->store_max) {
+            wk->sa->mp_rno = MP_NONE;
+            wk->sa->mp = 0;
+            break;
+        }
+        if (wk->sa->mp == -1) {
+            wk->sa->mp_rno = MP_USED;
+            wk->sa->saeff_mp = 1;
+        }
+        break;
+    case MP_USED:
+        switch (wk->sa->saeff_mp) {
+        case -1:
+            if (pcon_dp_flag == 0) {
+                wk->sa->store = 0;
+                wk->sa->gauge.i = 0;
+            }
+            wk->sa->saeff_mp = 0;
+            wk->sa->mp_rno = MP_NONE;
+            wk->sa->mp = 0;
+            break;
+        case 1:
+            if (wk->wu.routine_no[1] == PLAYER_ATTACK) {
+                break;
+            }
+            /* fall through */
+        default:
+            wk->sa->saeff_mp = 0;
+            wk->sa->mp_rno = MP_NONE;
+            wk->sa->mp = 0;
+            break;
+        }
+        break;
+    default:
+        wk->sa->mp_rno = MP_NONE;
+        wk->sa->mp = 0;
+        wk->sa->store = 0;
+        wk->sa->gauge.i = 0;
+        wk->sa->saeff_mp = 0;
+        break;
+    }
+}
+
+
+
+void eag_union(wk)
+PLW* wk;
+{
+    switch (wk->sa->ex_rno) {
+    case EX_NONE:
+        if (wk->player_number == PL_GOUKI1 || wk->player_number == PL_GOUKI2) {
+            if (wk->sa->store != 0) {
+                wk->sa->ex_rno = EX_READY;
+                wk->sa->ex = 1;
+            }
+            break;
+        }
+        if (wk->sa->store != 0 || wk->sa->gauge.s.h >= 40) {
+            wk->sa->ex_rno = EX_READY;
+            wk->sa->ex = 1;
+            break;
+        }
+        break;
+    case EX_READY:
+        if (wk->player_number == PL_GOUKI1 || wk->player_number == PL_GOUKI2) {
+            if (wk->sa->store == 0) {
+                wk->sa->ex_rno = EX_NONE;
+                wk->sa->ex = 0;
+                break;
+            }
+        } else if (wk->sa->store == 0 && wk->sa->gauge.s.h < 40) {
+            wk->sa->ex_rno = EX_NONE;
+            wk->sa->ex = 0;
+            break;
+        }
+        if (wk->sa->ex == -1) {
+            wk->sa->ex_rno = EX_USED;
+            sa_gauge_flash[wk->wu.id] |= 2;
+        }
+        break;
+    case EX_USED:
+        if (pcon_dp_flag == 0) {
+            if (wk->sa->gauge_type == SA_GAUGE_TIMER && wk->sa->store == wk->sa->store_max) {
+                wk->sa->gauge.i = 0;
+            }
+            if (wk->sa->gauge.s.h >= 40) {
+                wk->sa->gauge.s.h -= 40;
+            } else {
+                wk->sa->store--;
+                wk->sa->gauge.s.h += wk->sa->gauge_len - 40;
+            }
+        }
+        wk->sa->ex_rno = EX_NONE;
+        wk->sa->ex = 0;
+        break;
+    default:
+        wk->sa->ex_rno = EX_NONE;
+        wk->sa->ex = 0;
+        wk->sa->store = 0;
+        wk->sa->gauge.i = 0;
+        break;
+    }
+}
+
+
+
+/* provisional name */
+void sag_normal(PLW* wk) {
+    switch (wk->sa->sa_rno) {
+    case SA_NONE:
+        if (wk->sa->store) {
+            wk->sa->sa_rno = SA_READY;
+            wk->sa->ok = 1;
+            wk->sa->id_arts++;
+        }
+        wk->sa->saeff_ok = 0;
+        break;
+    case SA_READY:
+        if (wk->sa->store == 0) {
+            wk->sa->sa_rno = SA_NONE;
+            wk->sa->ok = 0;
+            break;
+        }
+        if (wk->sa->ok == -1) {
+            wk->sa->sa_rno = SA_USED;
+            wk->sa->saeff_ok = 1;
+        }
+        break;
+    case SA_USED:
+        switch (wk->sa->saeff_ok) {
+        case -1:
+            if (pcon_dp_flag == 0) {
+                wk->sa->store--;
+            }
+            wk->sa->saeff_ok = 0;
+            wk->sa->sa_rno = SA_NONE;
+            wk->sa->ok = 0;
+            break;
+        case 1:
+            if (wk->wu.routine_no[1] == PLAYER_ATTACK) {
+                break;
+            }
+            /* fall through */
+        default:
+            wk->sa->saeff_ok = 0;
+            wk->sa->sa_rno = SA_NONE;
+            wk->sa->ok = 0;
+            break;
+        }
+        break;
+    default:
+        wk->sa->sa_rno = SA_NONE;
+        wk->sa->ok = 0;
+        wk->sa->store = 0;
+        wk->sa->saeff_ok = 0;
+        break;
+    }
+}
+
+
+
+/* provisional name */
+void sag_timer(PLW* wk) {
+    switch (wk->sa->sa_rno) {
+    case SA_NONE:
+        if (wk->sa->store) {
+            wk->sa->sa_rno = SA_READY;
+            wk->sa->ok = 1;
+            wk->sa->id_arts++;
+        }
+        wk->sa->saeff_ok = 0;
+        break;
+    case SA_READY:
+        if (wk->sa->store == 0) {
+            wk->sa->sa_rno = SA_NONE;
+            wk->sa->ok = 0;
+            break;
+        }
+        if (wk->sa->ok == -1) {
+            wk->sa->sa_rno = SA_USED;
+            wk->sa->saeff_ok = 1;
+        }
+        break;
+    case SA_USED:
+        switch (wk->sa->saeff_ok) {
+        case -1:
+            if (pcon_dp_flag == 0) {
+                wk->sa->store--;
+            }
+            wk->sa->gauge.s.h = wk->sa->gauge_len;
+            wk->sa->gauge.s.l = -1;
+            wk->sa->sa_rno = SA_TIMER_WAIT;
+            wk->sa->saeff_ok = 0;
+            break;
+        case 1:
+            if (wk->wu.routine_no[1] == PLAYER_ATTACK) {
+                break;
+            }
+            /* fall through */
+        default:
+            wk->sa->saeff_ok = 0;
+            wk->sa->sa_rno = SA_NONE;
+            wk->sa->ok = 0;
+            wk->sa->dtm_mul = 1;
+            break;
+        }
+        break;
+    case SA_TIMER_WAIT:
+        if (Timer_Freeze != 0) {
+            break;
+        }
+        wk->sa->sa_rno = SA_TIMER_RUN;
+        /* fall through */
+    case SA_TIMER_RUN:
+        if ((wk->sa_stop_flag != 1) && (((PLW*)wk->wu.target_adrs)->sa_stop_flag != 1)) {
+            wk->sa->gauge.i -= wk->sa->dtm * wk->sa->dtm_mul;
+        }
+        if (wk->sa->gauge.s.h < 1) {
+            wk->sa->gauge.i = 0;
+            wk->sa->ok = 0;
+            wk->sa->sa_rno = SA_NONE;
+            wk->sa->dtm_mul = 1;
+            break;
+        }
+        if (My_char[wk->wu.id] == PL_YUN) {
+            wk->wu.kind_of_waza |= 0x20;
+            wk->wu.at_koa = 128;
+        }
+        if (My_char[wk->wu.id] == PL_YANG) {
+            wk->wu.kind_of_waza |= 0x20;
+            wk->wu.at_koa = 128;
+        }
+        if (My_char[wk->wu.id] == PL_KARATE) {
+            wk->wu.kind_of_waza |= 0x20;
+            wk->wu.at_koa = 128;
+        }
+        if (My_char[wk->wu.id] == PL_NO12) {
+            wk->wu.kind_of_waza |= 0x20;
+            wk->wu.at_koa = 128;
+        }
+        if ((My_char[wk->wu.id] == PL_ORO) && (wk->sa->kind_of_arts == 2)) {
+            wk->wu.att.dipsw |= 0x10;
+        }
+        break;
+    default:
+        wk->sa->sa_rno = SA_NONE;
+        wk->sa->ok = 0;
+        wk->sa->store = 0;
+        wk->sa->saeff_ok = 0;
+        wk->sa->dtm_mul = 1;
+        break;
+    }
+}
+
+
+/* provisional name */
+void sag_timer_dummy(void) {}
+
+
+
+/* provisional name */
+void sag_rebirth(PLW* wk) {
+    switch (wk->sa->sa_rno) {
+    case SA_NONE:
+        if (wk->sa->store) {
+            wk->sa->sa_rno = SA_READY;
+            wk->sa->ok = 1;
+        }
+        wk->sa->saeff_ok = 0;
+        break;
+    case SA_READY:
+        if (wk->sa->store == 0) {
+            wk->sa->sa_rno = SA_NONE;
+            wk->sa->ok = 0;
+            break;
+        }
+        if (wk->sa->ok == -1) {
+            wk->sa->sa_rno = SA_USED;
+            wk->sa->saeff_ok = 1;
+        }
+        break;
+    case SA_USED:
+        switch (wk->sa->saeff_ok) {
+        case -1:
+            wk->sa->store--;
+            wk->sa->gauge.i = 0;
+            wk->sa->saeff_ok = 0;
+            wk->sa->sa_rno = SA_REBIRTH;
+            break;
+        case 1:
+            return;
+        default:
+            wk->sa->saeff_ok = 0;
+            wk->sa->sa_rno = SA_NONE;
+            wk->sa->ok = 0;
+            break;
+        }
+        break;
+    case SA_REBIRTH:
+        return;
+    default:
+        wk->sa->sa_rno = SA_NONE;
+        wk->sa->ok = 0;
+        wk->sa->store = 0;
+        wk->sa->saeff_ok = 0;
+        break;
+    }
+}
+
+
+
+void demo_set_sa_full(SA_WORK* sa) {
+    sa->sa_rno = SA_READY;
+    sa->ok = 1;
+    sa->store = sa->store_max;
+    sa->id_arts++;
+    if (sa->gauge_type == SA_GAUGE_TIMER) {
+        sa->gauge.s.h = sa->gauge_len;
+        sa->dtm_mul = 1;
+    }
+}
+
+
+
+void get_saikinnno_idouryou(PLW* wk) {
+    s16 i;
+    for (i = 0; i < 7; i++) {
+        wk->old_pos_data[i] = wk->old_pos_data[i + 1];
+    }
+    wk->old_pos_data[i] = wk->wu.xyz[0].disp.pos;
+    wk->move_distance = wk->old_pos_data[7] - wk->old_pos_data[0];
+    wk->move_power = cal_move_quantity2(wk->old_pos_data[0], 0, wk->old_pos_data[7], 0);
+    wk->move_power >>= 3;
+}
+
+
+
+void clear_attack_num(WORK* wk) {
+    s16 i;
+    for (i = 0; i < 4; i++) {
+        wk->uketa_att[i] = 0;
+    }
+    wk->attack_num = 0;
+}
+
+
+
+void clear_tk_flags(PLW* wk) {
+    wk->tk_success = 0;
+    wk->tk_dageki = 0;
+    wk->tk_nage = 0;
+    wk->tk_kizetsu = 0;
+    wk->tk_konjyou = 0;
+    wk->att_plus = 8;
+    wk->def_plus = 8;
+}

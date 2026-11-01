@@ -1,0 +1,19 @@
+/*
+ * EFF94_TBL.C  quake-reactive stage prop data
+ *
+ * eff94_data_tbl holds one row per prop type: family, colour, position, priority, idle and
+ * reaction animations and behaviour. Read by EFF94.C.
+ */
+
+#include "types.h"
+#include "structs.h"
+
+#pragma section TBL
+
+const s16 eff94_data_tbl[5][10] = {
+    { 2, 8320, 392, 64, 12, 22, 52, 0, 0, 1 },
+    { 2, 8320, 408, 75, 11, 23, 53, 0, 1, 1 },
+    { 2, 8320, 640, 16, 10, 9, 10, 0, 4, 1 },
+    { 2, 8320, 352, 272, 10, 2, 2, 0, 2, 1 },
+    { 2, 8320, 352, 272, 10, 2, 2, 0, 3, 0 },
+};

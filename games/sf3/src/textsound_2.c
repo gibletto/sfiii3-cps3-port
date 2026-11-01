@@ -1,0 +1,566 @@
+/*
+ * TEXTSOUND_2.C  Text layer printing, sprite DMA copies and the sound driver interface (part 2)
+ *
+ * Sound driver interface: sound_driver_init, sound_request / sound_seq_start start a sound or music
+ * sequence on the BGM or sound-effect voices, and the sound_reg_* and voice_* routines trigger, set
+ * levels, read status, mute and fade. sound_driver_tick, called from the vertical blank interrupt,
+ * runs the master fade and then processes all 16 BGM and 16 effect voices through sound_voice.c.
+ */
+
+#include "structs.h"
+#include "work.h"
+#include "romdata.h"
+#include "extern.h"
+#include "sound_voice.h"
+#include "sound_voice_2.h"
+#include "textsound_2.h"
+#include "cps3.h"
+
+
+
+const u16 * snd_attack_ptr;  /* 02078CE8 */
+const u16 * snd_decay_ptr;  /* 02078CEC */
+const u16 * snd_lfo_rate_ptr;  /* 02078CF0 */
+const u16 * snd_pitch_lfo_ptr;  /* 02078CF4 */
+const u16 * snd_vol_lfo_ptr;  /* 02078CF8 */
+SNDSAMPLE * snd_sample_tbl;  /* 02078CFC */
+u8 ** snd_bank_tbl;  /* 02078D00 */
+u32 snd_fade_level;  /* 02078D04 */
+u32 snd_fade_speed;  /* 02078D08 */
+SNDVOICE bgm_voice[16];  /* 02078D0C */
+SNDVOICE se_voice[16];  /* 0207944C */
+SNDRAMP se_pan_ramp[16];  /* 02079B8C */
+/* added to every music voice's pitch (sound_reg_level_set) */
+s16 bgm_pitch_offset;  /* 02079C0C */
+u16 snd_wave_bias;  /* 02079C0E */
+SOUND_CTRL snd_ctrl;  /* 02079C10 */
+u32 bgm_tick_step;  /* 02079C14 */
+u32 se_tick_step[16];  /* 02079C18 */
+/* the music's volume offset; -128 silences it (sound_reg_level_set) */
+s8 bgm_volume_offset;  /* 02079C58 */
+u8 bgm_master_vol;  /* 02079C59 */
+u8 snd_master_vol;  /* 02079C5A */
+u8 snd_stereo;  /* 02079C5B */
+u8 gSeqStatus[16];  /* 02079C5C */
+u32 * snd_seq_data;  /* 02079C6C */
+SNDRAMP se_ramp_req;  /* 02079C70 */
+u16 snd_reg_save;  /* 02079C78 */
+u16 snd_seq_max;  /* 02079C7A */
+u8 bgm_status_save[16];  /* 02079C7C */
+/* the music state: 1 when stopped; 2 playing, 4 paused, 8 fading in, 0x10 fading out */
+u8 bgm_state;  /* 02079C8C */
+u8 bgm_state_tail[1];  /* after bgm_state; nothing refers to it by name or address */
+u8 bgm_master_vol_init;  /* 02079C8E */
+
+
+u32 bgm_tempo_add = 0;  /* 02007EE8 */
+
+
+/* provisional name */
+void bgm_tempo_set(s8 tempo) {
+    bgm_tempo_add = tempo * 3;
+}
+
+
+
+/* provisional name */
+s32 sound_driver_version(void) {
+    return 341;
+}
+
+/* provisional name */
+void sound_sample_bank_set(u16 bank) {
+    snd_wave_bias = bank;
+}
+
+
+
+/* provisional name */
+void sound_init(u8* data, SNDSAMPLE* sample, u8** bank_b, u8 stereo, u8 volume, u8 flag) {
+    SNDSAMPLE* bank_a = sample;
+    u16 init[21] = {
+        3, 1, 3, 1, 3, 1, 3, 0, 2, 1, 3, 0, 2, 0, 2, 0, 2, 2, 6, 6, 2
+    };
+    u16* p;
+    s32 n;
+    volatile u16* reg;
+    SNDVOICE* v;
+    u8* q;
+    snd_attack_ptr = snd_attack_rate_tbl;
+    snd_decay_ptr = snd_decay_rate_tbl;
+    snd_lfo_rate_ptr = snd_lfo_rate_tbl;
+    snd_pitch_lfo_ptr = snd_pitch_lfo_tbl;
+    snd_vol_lfo_ptr = snd_vol_lfo_tbl;
+    snd_sample_tbl = bank_a;
+    snd_bank_tbl = bank_b;
+    snd_stereo = flag;
+    for (p = init; p < &init[21]; p++) {
+        *(u16*)(EXT_SW + 0x202) = *p;
+        n = 0x100;
+        while (n--) {
+        }
+    }
+    reg = (volatile u16*)SOUND_REG;
+    for (n = 0x100; n != 0; reg++) {
+        *reg = 0;
+        n--;
+    }
+#ifdef HOST_LITTLE_ENDIAN
+    /* the store is to the u32's first halfword, its upper half (volume, mode, stereo): there on a little-endian
+       host too; the register block keeps the board's halfword order */
+    snd_ctrl.w.hi = (volume << 8) | (stereo & 1) | 0x22;
+    ((volatile u16*)(SOUND_REG + 0x210))[0] = snd_ctrl.w.hi;
+    ((volatile u16*)(SOUND_REG + 0x210))[1] = snd_ctrl.w.lo;
+#else
+    *(u16*)&snd_ctrl = (volume << 8) | (stereo & 1) | 0x22;
+    *(SOUND_CTRL*)(SOUND_REG + 0x210) = snd_ctrl;
+#endif
+#ifdef HOST_PORT
+    SOUND_KEY_WRITE(0);
+#else
+    *(u16*)SOUND_KEY_ON = 0;
+#endif
+    snd_seq_data = (u32*)data;
+#ifdef HOST_LITTLE_ENDIAN
+    /* the header is a u32 in the table (0x0CB31200): its bytes, read in the board's order */
+    snd_seq_max = snd_seq_data[0] >> 16;
+    bgm_master_vol = (u8)(snd_seq_data[0] >> 8);
+    bgm_master_vol_init = bgm_master_vol;
+    snd_master_vol = (u8)snd_seq_data[0];
+#else
+    snd_seq_max = *data++;
+    snd_seq_max <<= 8;
+    snd_seq_max += *data++;
+    bgm_master_vol = *data++;
+    bgm_master_vol_init = bgm_master_vol;
+    snd_master_vol = *data;
+#endif
+    bgm_state = 1;
+    bgm_pitch_offset = 0;
+    bgm_volume_offset = 0;
+    snd_fade_level = 0;
+    snd_fade_speed = 0;
+    bgm_tempo_add = 0;
+    q = &bgm_status_save[0];
+    for (v = &bgm_voice[0]; v < &bgm_voice[16];) {
+        (v++)->status = 0xC0;
+        *q++ = 0xC0;
+        (v++)->status = 0xC0;
+        *q++ = 0xC0;
+    }
+    for (v = se_voice; v < &se_voice[16];) {
+        (v++)->status = 0xC0;
+        (v++)->status = 0xC0;
+    }
+    for (q = gSeqStatus; q < &gSeqStatus[16];) {
+        *q++ = 0;
+        *q++ = 0;
+    }
+}
+
+
+
+/* provisional name */
+s32 sound_request(s32 code) {
+    return sound_seq_start(code, -1);
+}
+
+
+
+/* provisional name */
+s32 sound_seq_start(u16 code, s16 ramp) {
+    u8* seq;
+    u8* p;
+    u8* track;
+    u8** bank_table;
+    SNDVOICE* v;
+    u32 ofs;
+    s32 ticks;
+    s32 n;
+    u16 off;
+    u8 hdr;
+    u8 ch;
+    u8 i;
+    for (;;) {
+        if (code < snd_seq_max) {
+            break;
+        }
+        code -= snd_seq_max;
+    }
+    ofs = snd_seq_data[code + 1];
+    if (ofs == 0) {
+        return;
+    }
+    seq = (u8*)((u32)snd_seq_data + ofs);
+    p = seq;
+    hdr = *p++;
+    if (!hdr) {
+        bgm_stop();
+        for (i = 0; i < 16; i++) {
+            off = *p++ << 8;
+            off += *p++;
+            if (off) {
+                track = seq + off;
+                (v = &bgm_voice[i])->origin = track;
+                n = midi_vlq_decode_while(track, &ticks);
+                ticks <<= 8;
+                v->event_ticks = ticks;
+                v->cursor = &track[n];
+                v->status = 0x20;
+                bank_table = snd_bank_tbl;
+                v->patch = (SNDPATCH*)(*bank_table + *(u16*)*bank_table);
+                v->sample = &snd_sample_tbl[v->patch->sample_index];
+                v->note_ticks = 0;
+                v->decoded_pitch = 0;
+                v->target_pitch = 0;
+                v->current_pitch = 0;
+                v->pitch_lfo = 0;
+                v->volume_lfo = 0;
+                v->pitch_lfo_depth = 0;
+                v->volume_lfo_depth = 0;
+                v->lfo_rate = 0;
+                v->envelope_level = 0;
+                v->saved_portamento_step = 0;
+                v->portamento_step = 0;
+                v->program_index = 0;
+                v->attack_peak = 0;
+                v->attack_rate = 0;
+                v->sustain_level = 0;
+                v->decay_rate = 0;
+                v->release_rate = 0;
+                v->forced_release_rate = 0;
+                v->loop_count[0] = 0;
+                v->loop_count[1] = 0;
+                v->loop_count[2] = 0;
+                v->loop_count[3] = 0;
+                v->loop_latch = 0;
+                v->envelope_phase = 0;
+                v->lfo_phase_flags = 0;
+                v->priority_flags = hdr;
+                v->volume = 0;
+                v->velocity = 0;
+                v->expression = 0x40;
+                v->volume_offset = 0;
+                v->transpose = 0;
+                v->coarse_pitch_bend = 0;
+                v->fine_pitch_control = 0x40;
+                v->key_on_pending = 0;
+                v->duration_enabled = 0;
+                v->note_event_pending = 0;
+                v->tie = 0;
+                v->release_pending = 0;
+                v->restart_pending = 0;
+                v->pan_override = 0x40;
+                v->control_70 = 0;
+            } else {
+                bgm_voice[i].status = 0xC0;
+            }
+        }
+        if (!(bgm_state & 8)) {
+            snd_fade_level = 0x8000;
+        }
+        bgm_tempo_add = 0;
+        bgm_tick_step = 0;
+        bgm_state |= 2;
+        return;
+    } else if (!(hdr & 0x80)) {
+        for (i = 0; i < 16; i++) {
+            off = *p++ << 8;
+            off = off + *p++;
+            if (off) {
+                if (((hdr >= se_voice[i].priority_flags) & 0x7F) || (se_voice[i].status & 0x80)) {
+                    track = seq + off;
+                    n = midi_vlq_decode_while(track, &ticks);
+                    ticks <<= 8;
+                    v = &se_voice[i];
+                    v->event_ticks = ticks;
+                    v->cursor = &track[n];
+                    v->status = 0;
+                    bank_table = snd_bank_tbl;
+                    v->patch = (SNDPATCH*)(*bank_table + *(u16*)*bank_table);
+                    v->sample = &snd_sample_tbl[v->patch->sample_index];
+                    v->decoded_pitch = 0;
+                    v->target_pitch = 0;
+                    v->current_pitch = 0;
+                    v->pitch_lfo = 0;
+                    v->volume_lfo = 0;
+                    v->pitch_lfo_depth = 0;
+                    v->volume_lfo_depth = 0;
+                    v->lfo_rate = 0;
+                    v->envelope_level = 0;
+                    v->saved_portamento_step = 0;
+                    v->portamento_step = 0;
+                    v->program_index = 0;
+                    v->attack_peak = 0;
+                    v->attack_rate = 0;
+                    v->sustain_level = 0;
+                    v->decay_rate = 0;
+                    v->release_rate = 0;
+                    v->forced_release_rate = 0;
+                    v->loop_count[0] = 0;
+                    v->loop_count[1] = 0;
+                    v->loop_count[2] = 0;
+                    v->loop_count[3] = 0;
+                    v->loop_latch = 0;
+                    v->envelope_phase = 0;
+                    v->pan_override = 0x40;
+                    v->lfo_phase_flags = 0;
+                    v->priority_flags = hdr;
+                    v->volume = 0;
+                    bgm_voice[i].velocity = 0x7F;
+                    v->expression = 0x7F;
+                    v->volume_offset = 0;
+                    v->transpose = 0;
+                    v->coarse_pitch_bend = 0;
+                    v->fine_pitch_control = 0x40;
+                    v->key_on_pending = 0;
+                    v->duration_enabled = 0;
+                    v->note_event_pending = 0;
+                    v->tie = 0;
+                    v->release_pending = 0;
+                    v->pan_override = 0x40;
+                    v->control_70 = 0;
+                    if (ramp != -1) {
+                        se_pan_ramp[i].current = se_ramp_req.current;
+                        se_pan_ramp[i].target = se_ramp_req.target;
+                        se_pan_ramp[i].step = se_ramp_req.step;
+                        se_pan_ramp[i].mode = se_ramp_req.mode;
+                    } else {
+                        se_pan_ramp[i].current = 0;
+                        se_pan_ramp[i].target = 0;
+                        se_pan_ramp[i].step = 0;
+                        se_pan_ramp[i].mode = -1;
+                    }
+                    se_tick_step[i] = 0;
+                }
+            }
+        }
+        (void)&((WORK*)se_tick_step)->id;
+        return;
+    }
+    if (ch = hdr & 0xF, (*p & 0x7F) < (se_voice[ch].priority_flags & 0x7F) && !(se_voice[ch].status & 0x80)) {
+        return;
+    }
+    se_voice[ch].cursor = p;
+    bank_table = snd_bank_tbl;
+    se_voice[ch].patch = (SNDPATCH*)(*bank_table + *(u16*)*bank_table);
+    (void)&((WORK*)hdr)->id;
+    se_voice[ch].sample = &snd_sample_tbl[se_voice[ch].patch->sample_index];
+    se_voice[ch].envelope_level = 0;
+    se_voice[ch].program_index = 0;
+    se_voice[ch].attack_peak = 0;
+    se_voice[ch].attack_rate = 0;
+    se_voice[ch].sustain_level = 0;
+    se_voice[ch].decay_rate = 0;
+    se_voice[ch].release_rate = 0;
+    se_voice[ch].forced_release_rate = 0;
+    se_voice[ch].volume = 0;
+    se_voice[ch].expression = se_voice[ch].velocity = 0x7F;
+    se_voice[ch].volume_offset = 0;
+    se_voice[ch].transpose = 0;
+    se_voice[ch].coarse_pitch_bend = 0;
+    se_voice[ch].fine_pitch_control = 0x40;
+    se_voice[ch].priority_flags = *p | 0x80;
+    se_voice[ch].pan_override = 0x40;
+    if (ramp != -1) {
+        se_pan_ramp[ch].current = se_ramp_req.current;
+        se_pan_ramp[ch].target = se_ramp_req.target;
+        se_pan_ramp[ch].step = se_ramp_req.step;
+        se_pan_ramp[ch].mode = se_ramp_req.mode;
+    } else {
+        se_pan_ramp[ch].current = 0;
+        se_pan_ramp[ch].target = 0;
+        se_pan_ramp[ch].step = 0;
+        se_pan_ramp[ch].mode = -1;
+    }
+    se_voice[ch].status = 0;
+}
+
+
+
+/* provisional name */
+void sound_request_pan(u16 code, s16 vol_l, s16 vol_r, s16 time, s16 ramp) {
+    if (vol_l < 0) {
+        vol_l = 0;
+    } else if (vol_l > 127) {
+        vol_l = 127;
+    }
+    if (vol_r < 0) {
+        vol_r = 0;
+    } else if (vol_r > 127) {
+        vol_r = 127;
+    }
+    se_ramp_req.current = vol_l << 8;
+    se_ramp_req.target = vol_r << 8;
+    se_ramp_req.step = (se_ramp_req.target - se_ramp_req.current) / time;
+    se_ramp_req.mode = ramp;
+    sound_seq_start(code, ramp);
+}
+
+
+
+/* provisional name */
+void bgm_stop(void) {
+    u8 i;
+    if (!(bgm_state & 2)) {
+        return;
+    }
+    for (i = 0; i < 16; i++) {
+        bgm_voice[i].status = 192;
+    }
+    bgm_state = 1;
+    snd_reg_save = 0;
+}
+
+
+
+/* provisional name */
+void bgm_pause(void) {
+    u8 i;
+    if (!(bgm_state & 2) || (bgm_state & 4)) {
+        return;
+    }
+    snd_reg_save = *(u16*)SOUND_KEY_ON;
+    for (i = 0; i < 16; i++) {
+        bgm_status_save[i] = bgm_voice[i].status;
+        bgm_voice[i].status = 192;
+    }
+    bgm_state |= 4;
+}
+
+
+/* provisional name */
+void bgm_resume(void) {
+    u8* save;
+    SNDVOICE* v;
+    u8 i;
+    if (!(bgm_state & 2) || !(bgm_state & 4)) {
+        return;
+    }
+    for (i = 0, save = bgm_status_save, v = bgm_voice; i < 16; i++) {
+        v->status = *save;
+        save++;
+        v++;
+    }
+    bgm_state &= ~4;
+#ifdef HOST_PORT
+    SOUND_KEY_WRITE(*(u16*)SOUND_KEY_ON | snd_reg_save);
+#else
+    *(u16*)SOUND_KEY_ON |= snd_reg_save;
+#endif
+}
+
+/* provisional name */
+u32 sound_fade_in_submit(u16 code_no, u16 speed) {
+    snd_fade_level = 0;
+    snd_fade_speed = speed & 0x7FFF;
+    bgm_state |= 8;
+    return sound_seq_start(code_no, -1);
+}
+
+
+
+/* provisional name */
+void bgm_fade_out(cmd)
+u16 cmd;
+{
+    if (bgm_state & 2) {
+        snd_fade_speed = cmd & 0x7FFF;
+        bgm_state &= 0xF7;
+        bgm_state |= 0x10;
+    }
+}
+
+
+
+/* provisional name */
+void sound_reg_level_set(s16 pitch, s8 volume) {
+    bgm_pitch_offset = pitch;
+    bgm_volume_offset = volume;
+}
+
+
+
+/* provisional name */
+u8 sound_status_read(void) {
+    return bgm_state;
+}
+
+
+
+/* provisional name */
+void sound_driver_init(void) {
+    u8 i;
+    for (i = 0; i < 16; i++) {
+        bgm_voice[i].status = 192;
+        se_voice[i].status = 192;
+        se_voice[i].priority_flags = 0;
+    }
+    bgm_state = 1;
+#ifdef HOST_PORT
+    SOUND_KEY_WRITE(0);
+#else
+    *(u16*)SOUND_KEY_ON = 0;
+#endif
+    snd_reg_save = 0;
+}
+
+
+
+/* provisional name */
+void se_voice_stop(u8 ch) {
+    se_voice[ch].status = 192;
+    se_voice[ch].priority_flags = 0;
+}
+
+
+
+/* provisional name */
+void se_voice_stop_all(void) {
+    u8 i;
+    for (i = 0; i < 16; i++) {
+        se_voice[i].status = 192;
+        se_voice[i].priority_flags = 0;
+    }
+}
+
+
+
+/* provisional name */
+void sound_driver_tick(void) {
+    u32 i;
+    if ((bgm_state & 8) && !(bgm_state & 4)) {
+        snd_fade_level += snd_fade_speed;
+        if (snd_fade_level >= 0x8000) {
+            snd_fade_level = 0x8000;
+            bgm_state &= ~8;
+        }
+    }
+    if ((bgm_state & 0x10) && !(bgm_state & 4)) {
+        if (snd_fade_speed >= snd_fade_level) {
+            bgm_stop();
+            snd_fade_level = 0;
+            bgm_state &= ~0x10;
+        } else {
+            snd_fade_level -= snd_fade_speed;
+        }
+    }
+    for (i = 0; i < 16; i++) {
+        voice_process_primary(&bgm_voice[i], 1, i);
+    }
+    for (i = 0; i < 16; i++) {
+        if (se_voice[i].priority_flags & 0x80) {
+            voice_process_null(&se_voice[i], i);
+        } else {
+            voice_process_primary(&se_voice[i], 0, i);
+        }
+    }
+    for (i = 0; i < 16; i++) {
+        voice_process_secondary(&bgm_voice[i], i, 1);
+    }
+    for (i = 0; i < 16; i++) {
+        if (!(se_voice[i].priority_flags & 0x80)) {
+            voice_process_secondary(&se_voice[i], i, 0);
+        }
+    }
+}

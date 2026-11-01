@@ -1,0 +1,316 @@
+/*
+ * EFFK7.C  Effect K7: metamorphosis super art controller (character 19)
+ *
+ * Effect K7 is created by Att_METAMORPHOSE (plpat19) and supervises the player while the
+ * metamorphosis super art runs.
+ * Type 0 (K7_move_type_0) turns the player into the opponent: at the marked animation frame it
+ * takes the opponent's character number and charset, reloads base data (set_base_data_metamorphose)
+ * and the attack/defence ratings and borrows the opponent's colours; when the art expires or a
+ * rebirth check fires it plays the return animation and restores the original character.
+ * Type 1 (K7_move_type_1) blinks the player from K7_blink_tbl while the art is active and
+ * switches to K7_last_tbl when the gauge is nearly spent.
+ * On exit the routine restores colour, display and the default attack/defence values.
+ */
+
+#include "structs.h"
+#include "work.h"
+#include "romdata.h"
+#include "extern.h"
+#include "PLCNTDAT.h"
+#include "plcntdat_2.h"
+#include "meta_col.h"
+#include "meta_col_mem.h"
+#include "meta_col_strcpy.h"
+#include "meta_col_lib.h"
+#include "meta_col_bcd.h"
+#include "Com_Pl.h"
+#include "EFFECT.h"
+#include "effect_2.h"
+#include "end_sub.h"
+#include "end_sub_2.h"
+#include "end_sub_3.h"
+#include "end_sub_4.h"
+#include "end_sub_5.h"
+#include "end_sub_6.h"
+#include "end_sub_7.h"
+#include "color3rd.h"
+#include "end_sub_8.h"
+#include "CHARMOVE.h"
+#include "charmove_2.h"
+#include "EFFK7.h"
+
+/* routine_no[0] */
+#define R0_INIT         0       /* keep the player's colours */
+#define R0_MOVE         1       /* run the blink or change type */
+#define R0_KILL         2       /* restore the player and put back */
+
+/* routine_no[1], type 1: blink */
+#define R1_WAIT         0       /* wait for the change frame */
+#define R1_BLINK        1       /* blink while the gauge lasts */
+#define R1_LAST         2       /* last blinks, then end */
+
+/* routine_no[1], type 0: change into the opponent */
+#define R1_COLOUR       1       /* wait, then take the opponent's colours */
+#define R1_ACTIVE       2       /* until the art runs out */
+#define R1_REBIRTH      3       /* wait to start the return */
+#define R1_RETURN       4       /* restore the original character */
+#define R1_END          5       /* finish */
+#define R1_DEAD         9       /* player down: stop */
+
+void effect_K7_move(WORK_Other* ewk) {
+    PLW* mwk = (PLW*)ewk->my_master;
+
+    switch (ewk->wu.routine_no[0]) {
+    case R0_INIT:
+        if (ewk->wu.type) {
+            ewk->wu.routine_no[0] = R0_MOVE;
+            break;
+        }
+        ewk->wu.routine_no[0] = R0_MOVE;
+        metamor_color_store(mwk->wu.id);
+        return;
+    case R0_MOVE:
+        if (ewk->wu.dead_f == 1) {
+            ewk->wu.routine_no[0] = R0_KILL;
+            break;
+        }
+        if (mwk->metamor_index != ewk->wu.myself) {
+            ewk->wu.routine_no[0] = R0_KILL;
+            break;
+        }
+        if (EXE_flag != 0) {
+            return;
+        }
+        if (Game_pause != 0) {
+            break;
+        }
+        if (ewk->wu.type) {
+            K7_move_type_1(ewk, mwk);
+            return;
+        }
+        K7_move_type_0(ewk, mwk);
+        return;
+    case R0_KILL:
+        mwk->metamorphose = 0;
+        mwk->metamor_over = 0;
+        mwk->att_plus = 8;
+        mwk->def_plus = 8;
+        mwk->wu.my_col_mode = ewk->wu.my_col_mode;
+        mwk->wu.my_col_code = ewk->wu.my_col_code;
+        mwk->wu.disp_flag = 1;
+        /* fall through */
+    default:
+        push_effect_work(&ewk->wu);
+        return;
+    }
+}
+
+
+
+/* provisional name */
+void K7_move_type_1(WORK_Other* ewk, PLW* mwk) {
+    const s16(*blink)[4];
+    const s16(*last)[4];
+    if (mwk->sa->ok != -1 || mwk->dead_flag != 0) {
+        ewk->wu.routine_no[0] = R0_KILL;
+        return;
+    }
+    last = K7_last_tbl;
+    blink = K7_blink_tbl;
+    switch (ewk->wu.routine_no[1]) {
+    case R1_WAIT:
+        if (mwk->wu.cg_type != 20) {
+            break;
+        }
+        ewk->wu.routine_no[1] = R1_BLINK;
+        ewk->wu.dir_step = 0;
+        ewk->wu.dir_old = blink[ewk->wu.dir_step][3];
+        ewk->wu.dir_timer = blink[ewk->wu.dir_step][0];
+        mwk->wu.disp_flag = blink[ewk->wu.dir_step][1];
+        mwk->wu.my_col_mode = blink[ewk->wu.dir_step][2];
+        /* fall through */
+    case R1_BLINK:
+        if (ewk->wu.dir_step > 2) {
+            if ((mwk->sa->gauge.i - 0x10000) / (mwk->sa->dtm * mwk->sa->dtm_mul) <= 45) {
+                ewk->wu.routine_no[1] = R1_LAST;
+                ewk->wu.dir_step = 0;
+                ewk->wu.dir_old = last[ewk->wu.dir_step][3];
+                ewk->wu.dir_timer = last[ewk->wu.dir_step][0];
+                mwk->wu.disp_flag = last[ewk->wu.dir_step][1];
+                mwk->wu.my_col_mode = last[ewk->wu.dir_step][2];
+                if (ewk->wu.dir_old) {
+                    K7_col_mode_flip(&mwk->wu);
+                }
+                break;
+            }
+        }
+        if (--ewk->wu.dir_timer < 0) {
+            do {
+                ewk->wu.dir_step++;
+            } while (blink[ewk->wu.dir_step][0] == 0);
+            if (blink[ewk->wu.dir_step][0] == -1) {
+                ewk->wu.dir_step = blink[ewk->wu.dir_step][1];
+            }
+            ewk->wu.dir_old = blink[ewk->wu.dir_step][3];
+            ewk->wu.dir_timer = blink[ewk->wu.dir_step][0];
+            mwk->wu.disp_flag = blink[ewk->wu.dir_step][1];
+            mwk->wu.my_col_mode = blink[ewk->wu.dir_step][2];
+        }
+        if (ewk->wu.dir_old) {
+            K7_col_mode_flip(&mwk->wu);
+        }
+        break;
+    case R1_LAST:
+        if (--ewk->wu.dir_timer < 0) {
+            do {
+                ewk->wu.dir_step++;
+            } while (blink[ewk->wu.dir_step][0] == 0);
+            if (last[ewk->wu.dir_step][0] == -1) {
+                ewk->wu.routine_no[0] = R0_KILL;
+                break;
+            }
+            ewk->wu.dir_old = last[ewk->wu.dir_step][3];
+            ewk->wu.dir_timer = last[ewk->wu.dir_step][0];
+            mwk->wu.disp_flag = last[ewk->wu.dir_step][1];
+            mwk->wu.my_col_mode = last[ewk->wu.dir_step][2];
+        }
+        if (ewk->wu.dir_old) {
+            K7_col_mode_flip(&mwk->wu);
+        }
+        break;
+    }
+}
+
+
+
+/* provisional name */
+void K7_col_mode_flip(WORK* wk) {
+    if (wk->my_col_mode == 0x4400) {
+        wk->my_col_mode = 0x4200;
+    } else {
+        wk->my_col_mode = 0x4400;
+    }
+}
+
+
+
+void K7_move_type_0(WORK_Other* ewk, PLW* mwk) {
+    switch (ewk->wu.routine_no[1]) {
+    case R1_WAIT:
+        if (mwk->wu.cg_type != 20) {
+            break;
+        }
+        ewk->wu.routine_no[1] = R1_COLOUR;
+        ewk->wu.direction = mwk->player_number;
+        ewk->wu.charset_id = mwk->wu.charset_id;
+        mwk->player_number = ((PLW*)mwk->wu.target_adrs)->player_number;
+        mwk->wu.charset_id = ((PLW*)mwk->wu.target_adrs)->wu.charset_id;
+        set_base_data_metamorphose(mwk);
+        mwk->att_plus = 10;
+        mwk->def_plus = 6;
+        if (mwk->wu.operator == 0) {
+            Next_Be_Free(mwk);
+        }
+        break;
+    case R1_COLOUR:
+        if (mwk->wu.cg_type != 30) {
+            break;
+        }
+        ewk->wu.routine_no[1] = R1_ACTIVE;
+        metamor_color_trans(mwk->wu.id, mwk->player_number);
+        metamor_color_copy(mwk->wu.id);
+        mwk->metamorphose = 1;
+        /* fall through */
+    case R1_ACTIVE:
+        if (mwk->dead_flag != 0) {
+            ewk->wu.routine_no[1] = R1_DEAD;
+            break;
+        }
+        if (mwk->sa->ok == -1) {
+            break;
+        }
+        ewk->wu.routine_no[1] = R1_REBIRTH;
+        mwk->metamor_over = 1;
+        /* fall through */
+    case R1_REBIRTH:
+        if (K7_mt0_rebirth_check(mwk) == 0) {
+            break;
+        }
+        ewk->wu.routine_no[1] = R1_RETURN;
+        mwk->wu.routine_no[1] = PLAYER_ATTACK;
+        mwk->wu.routine_no[2] = ATTACK_METAMOR_REBIRTH;
+        mwk->wu.routine_no[3] = RN3_START;
+        mwk->metamor_over = 0;
+        mwk->wu.cg_type = 0;
+        mwk->wu.cg_hit_ix = 0;
+        mwk->wu.cg_ja = mwk->wu.hit_ix_table[mwk->wu.cg_hit_ix];
+        set_jugde_area(&mwk->wu);
+        break;
+    case R1_RETURN:
+        if (mwk->wu.cg_type != 30) {
+            break;
+        }
+        ewk->wu.routine_no[1] = R1_END;
+        mwk->player_number = ewk->wu.direction;
+        mwk->wu.charset_id = ewk->wu.charset_id;
+        set_base_data_metamorphose(mwk);
+        metamor_color_restore(mwk->wu.id);
+        metamor_color_reset(mwk->wu.id);
+        if (mwk->wu.operator == 0) {
+            Next_Be_Free(mwk);
+        }
+        break;
+    case R1_END:
+        ewk->wu.routine_no[0] = R0_KILL;
+        break;
+    }
+}
+
+
+
+s32 K7_mt0_rebirth_check(PLW* mwk) {
+    s16 num = 0;
+
+    switch (mwk->wu.routine_no[1]) {
+    case PLAYER_NORMAL:
+        if (pcon_dp_flag) {
+            if (mwk->wu.routine_no[2] == NORMAL_STAND && mwk->wu.routine_no[3] != RN3_START) {
+                num = 1;
+            }
+        } else {
+            if (mwk->guard_flag != 3 && !mwk->wu.hit_stop) {
+                num = 1;
+            }
+        }
+        break;
+    default:
+        break;
+    }
+    return num;
+}
+
+
+
+s32 effect_K7_init(PLW* wk) {
+    WORK_Other* ewk;
+    s16 ix;
+    if (test_flag) {
+        return -1;
+    }
+    if ((ix = pull_effect_work(0)) == -1) {
+        return -1;
+    }
+    ewk = (WORK_Other*)frw[ix];
+    ewk->wu.be_flag = 1;
+    ewk->wu.id = 207;
+    ewk->wu.work_id = 16;
+    ewk->wu.type = 0;
+    ewk->my_master = (u32*)wk;
+    wk->metamor_index = ewk->wu.myself;
+    ewk->wu.my_col_mode = 0x4200;
+    ewk->wu.my_col_code = 0x2000;
+    if (wk->wu.id) {
+        ewk->wu.my_col_code += 16;
+    }
+    return 0;
+}

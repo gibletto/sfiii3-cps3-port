@@ -1,0 +1,435 @@
+/*
+ * EFFK5.C  Effect K5: interpolated body and hand damage boxes for a player
+ *
+ * Effect K5 (id 205) is an invisible helper created for each player by effect_K5_init (from
+ * PLCNTDAT and CMD_MAIN; never in bonus game 21). It moves the player's damage (hurt) boxes
+ * smoothly between animation frames instead of letting them jump.
+ * Each time the player's hit index changes, K5_init_data loads eight joints (four body
+ * boxes, four hand boxes) from the master's tables; get_okuri_time scans ahead in the animation
+ * script to find how many frames remain until the next hit index, and K5_decode_new_hit_index
+ * sets up per-joint speeds (switch fields from decode_mvsw).
+ * K5_main_process advances the joints each frame and K5_init_data_copy2 writes them into the
+ * rambod / ramhan RAM boxes, which the player's h_bod / h_han pointers then use for hit checks.
+ */
+
+#include "structs.h"
+#include "work.h"
+#include "romdata.h"
+#include "extern.h"
+#include "CALDIR.h"
+#include "EFFECT.h"
+#include "effect_2.h"
+#include "EFFK5.h"
+
+/* routine_no[0] */
+#define R0_INIT         0       /* get the joint work and load the boxes */
+#define R0_MOVE         1       /* move the boxes and hand them over */
+#define R0_KILL         2       /* put back the joint work and this one */
+#define R0_ABORT        3       /* (default) no joint work: put this one back */
+
+/* routine_no[1] */
+#define R1_SCAN         0       /* count the frames to the next box set */
+#define R1_SLIDE        1       /* move the joints each frame */
+#define R1_HOLD         2       /* keep the boxes as they are */
+
+void get_okuri_time(WORK* ewk, WORK* mwk, MVJ* mvj);
+
+
+void effect_K5_move(WORK_Other* ewk) {
+    WORK* mwk = (WORK*)ewk->my_master;
+    MVJ* mvj;
+    switch (ewk->wu.routine_no[0]) {
+    case R0_INIT:
+        ewk->wu.routine_no[0]++;
+        if (get_cal_work(&ewk->wu) == -1) {
+            ewk->wu.routine_no[0] = R0_ABORT;
+            break;
+        }
+        mvj = (MVJ*)(((WORK*)ewk->wu.target_adrs)->routine_no);
+        init_K5_work(&ewk->wu, mwk, mvj);
+        ewk->wu.old_rno[1] = mwk->cg_hit_ix;
+        get_table_adrs_K5(mwk);
+        K5_init_data(mwk, mvj, (u16*)(&mwk->cg_ja));
+        break;
+    case R0_MOVE:
+        if (ewk->wu.dead_f == 1) {
+            ewk->wu.disp_flag = 0;
+            ewk->wu.routine_no[0] = R0_KILL;
+            break;
+        }
+        if (((PLW*)mwk)->waku_ram_index != ewk->wu.myself) {
+            ewk->wu.disp_flag = 0;
+            ewk->wu.routine_no[0] = R0_KILL;
+            break;
+        }
+        get_master_table_address(&ewk->wu, mwk);
+        mvj = (MVJ*)(((WORK*)ewk->wu.target_adrs)->routine_no);
+        if (mwk->K5_exec_ok) {
+            mwk->K5_exec_ok = 0;
+            if (mwk->K5_init_flag || (ewk->wu.old_rno[1] != mwk->cg_hit_ix)) {
+                mwk->K5_init_flag = 0;
+                ewk->wu.old_rno[1] = mwk->cg_hit_ix;
+                ewk->wu.routine_no[1] = R1_SCAN;
+                K5_init_data(mwk, mvj, (u16*)(&mwk->cg_ja));
+            }
+            K5_main_process(&ewk->wu, mwk, mvj);
+        }
+        K5_init_data_copy2((K5Data*)&rambod[mwk->id], mvj, 4);
+        K5_init_data_copy2((K5Data*)&ramhan[mwk->id], mvj + 4, 4);
+        mwk->h_bod = (BODY_BOX*)&rambod[mwk->id];
+        mwk->h_han = (HAND_BOX*)&ramhan[mwk->id];
+        break;
+    case R0_KILL:
+        push_effect_work((WORK*)ewk->wu.target_adrs);
+        /* fall through */
+    default:
+        push_effect_work(&ewk->wu);
+        break;
+    }
+}
+
+
+
+void K5_main_process(WORK* ewk, WORK* mwk, MVJ* mvj) {
+    s16 i;
+    switch (ewk->routine_no[1]) {
+    case R1_SCAN:
+        get_okuri_time(ewk, mwk, mvj);
+        break;
+    case R1_SLIDE:
+        for (i = 0; i < 8; i++) {
+            if (mvj[i].rno) {
+                k5_add_sub(&mvj[i]);
+            }
+        }
+        break;
+    }
+}
+
+
+
+void get_okuri_time(WORK* ewk, WORK* mwk, MVJ* mvj) {
+    GOTCP gotcp;
+    ST st;
+    s16 exc;
+    u16 now_mf;
+    if (mwk->cgd_type == 2) {
+        goto end;
+    }
+    if (!(mwk->cg_ja.mf.full & 0x1010)) {
+        goto end;
+    }
+    now_mf = mwk->cg_ja.mf.full;
+    exc = 0;
+    ewk->old_rno[0] = mwk->cg_ctr;
+    ewk->cg_ix = mwk->cg_ix;
+loop:
+    {
+        ewk->cg_ix += mwk->cgd_type;
+        gotcp.cpl = &mwk->set_char_ad[ewk->cg_ix];
+        if (LINE_CODE(gotcp.cps[0]) < 0x100) {
+            goto skip;
+        }
+#ifdef HOST_LITTLE_ENDIAN
+        /* the line's att and hit words as the board's u32 read gives them: the first word high */
+        st.l = (gotcp.cps[4] << 16) | gotcp.cps[5];
+#else
+        st.l = gotcp.cpl[2];
+#endif
+        st.l *= 8;
+        ewk->cg_hit_ix = st.w.h & 0x1FF;
+        if (ewk->old_rno[1] == ewk->cg_hit_ix) {
+            if ((gotcp.cpc[1] != 0xFF) || (gotcp.cpc[0] < 0xC8)) {
+                ewk->old_rno[0] += gotcp.cpc[0];
+            }
+            goto loop;
+        }
+        if (ewk->old_rno[0] >= 2) {
+            K5_decode_new_hit_index(ewk, mvj, now_mf);
+            ewk->routine_no[1] = R1_SLIDE;
+            return;
+        }
+        goto end;
+    skip:
+        if (k5_exc_check[LINE_CODE(gotcp.cps[0])] == 2) {
+            goto end;
+        }
+        if (k5_exc_check[LINE_CODE(gotcp.cps[0])]) {
+            goto loop;
+        }
+        if (exc++ < 4) {
+            switch (LINE_CODE(gotcp.cps[0])) {
+            case 2:
+                ewk->cg_ix = (gotcp.cps[3] - 2) * mwk->cgd_type;
+                break;
+            case 49:
+                if ((test_flag == 0) || (ixbfw_cut == 0)) {
+                    ewk->cg_ix += (gotcp.cps[3] - 1) * mwk->cgd_type;
+                }
+                break;
+            case 50:
+                if (test_flag != 0 && ixbfw_cut != 0) {
+                    break;
+                } else {
+                    ewk->cg_ix -= (gotcp.cps[3] + 1) * mwk->cgd_type;
+                }
+                /* fall through */
+            default:
+                break;
+            }
+            goto loop;
+        } else {
+            goto end;
+        }
+    }
+end:
+    ewk->old_rno[0] = 1;
+    ewk->routine_no[1] = R1_HOLD;
+}
+
+
+
+void K5_decode_new_hit_index(wk, mvj, mf)
+WORK* wk;
+MVJ* mvj;
+u16 mf;
+{
+    s16 i;
+    s16 x1;
+    s16 y1;
+    MVSW_BE mvsw;
+    get_table_adrs_K5(wk);
+    mvsw.swi = decode_mvsw(mf);
+    if (wk->cg_ja.boix == mvj[0].index) {
+        goto next;
+    }
+    i = 0;
+    goto test0;
+    loop0:
+        if (mvj[i].r[1].pos.h != 0) {
+            wk->xyz[0].disp.pos = mvj[i].r[0].pos.h;
+            wk->xyz[1].disp.pos = mvj[i].r[1].pos.h;
+            if ((y1 = wk->h_bod->body_dm[i][1])) {
+                x1 = wk->h_bod->body_dm[i][0];
+            } else {
+                x1 = wk->xyz[0].disp.pos + wk->xyz[1].disp.pos / 2;
+            }
+            cal_all_speed_data(wk, wk->old_rno[0], x1, y1, mvsw.swc[BE_BYTE(0, 4)], mvsw.swc[BE_BYTE(2, 4)]);
+            mvj[i].r[0].cal = wk->xyz[0].cal;
+            mvj[i].r[1].cal = wk->xyz[1].cal;
+            mvj[i].a[0].sp = wk->mvxy.a[0].sp;
+            mvj[i].d[0].sp = wk->mvxy.d[0].sp;
+            mvj[i].a[1].sp = wk->mvxy.a[1].sp;
+            mvj[i].d[1].sp = wk->mvxy.d[1].sp;
+            wk->xyz[0].disp.pos = mvj[i].r[2].pos.h;
+            wk->xyz[1].disp.pos = mvj[i].r[3].pos.h;
+            if ((y1 = wk->h_bod->body_dm[i][3])) {
+                x1 = wk->h_bod->body_dm[i][2];
+            } else {
+                x1 = wk->xyz[0].disp.pos + wk->xyz[1].disp.pos / 2;
+            }
+            cal_all_speed_data(wk, wk->old_rno[0], x1, y1, mvsw.swc[BE_BYTE(1, 4)], mvsw.swc[BE_BYTE(3, 4)]);
+            mvj[i].r[2].cal = wk->xyz[0].cal;
+            mvj[i].r[3].cal = wk->xyz[1].cal;
+            mvj[i].a[2].sp = wk->mvxy.a[0].sp;
+            mvj[i].d[2].sp = wk->mvxy.d[0].sp;
+            mvj[i].a[3].sp = wk->mvxy.a[1].sp;
+            mvj[i].d[3].sp = wk->mvxy.d[1].sp;
+            mvj[i].rno = 1;
+        } else {
+            mvj[i].rno = 0;
+        }
+        mvj[i].index = wk->cg_ja.boix;
+        i++;
+    test0:
+        if (i >= 4) {
+            goto next;
+        }
+        goto loop0;
+next:
+    if ((wk->cg_ja.bhix + wk->cg_ja.haix) != mvj[4].index) {
+        i = 4;
+        goto test1;
+    loop1:
+            if (mvj[i].r[1].pos.h != 0) {
+                wk->xyz[0].disp.pos = mvj[i].r[0].pos.h;
+                wk->xyz[1].disp.pos = mvj[i].r[1].pos.h;
+                if ((y1 = wk->h_han->hand_dm[i - 4][1])) {
+                    x1 = wk->h_han->hand_dm[i - 4][0];
+                } else {
+                    x1 = wk->xyz[0].disp.pos + wk->xyz[1].disp.pos / 2;
+                }
+                cal_all_speed_data(wk, wk->old_rno[0], x1, y1, mvsw.swc[BE_BYTE(0, 4)], mvsw.swc[BE_BYTE(2, 4)]);
+                mvj[i].r[0].cal = wk->xyz[0].cal;
+                mvj[i].r[1].cal = wk->xyz[1].cal;
+                mvj[i].a[0].sp = wk->mvxy.a[0].sp;
+                mvj[i].d[0].sp = wk->mvxy.d[0].sp;
+                mvj[i].a[1].sp = wk->mvxy.a[1].sp;
+                mvj[i].d[1].sp = wk->mvxy.d[1].sp;
+                wk->xyz[0].disp.pos = mvj[i].r[2].pos.h;
+                wk->xyz[1].disp.pos = mvj[i].r[3].pos.h;
+                if ((y1 = wk->h_han->hand_dm[i - 4][3])) {
+                    x1 = wk->h_han->hand_dm[i - 4][2];
+                } else {
+                    x1 = wk->xyz[0].disp.pos + wk->xyz[1].disp.pos / 2;
+                }
+                cal_all_speed_data(wk, wk->old_rno[0], x1, y1, mvsw.swc[BE_BYTE(1, 4)], mvsw.swc[BE_BYTE(3, 4)]);
+                mvj[i].r[2].cal = wk->xyz[0].cal;
+                mvj[i].r[3].cal = wk->xyz[1].cal;
+                mvj[i].a[2].sp = wk->mvxy.a[0].sp;
+                mvj[i].d[2].sp = wk->mvxy.d[0].sp;
+                mvj[i].a[3].sp = wk->mvxy.a[1].sp;
+                mvj[i].d[3].sp = wk->mvxy.d[1].sp;
+                mvj[i].rno = 1;
+            } else {
+                mvj[i].rno = 0;
+            }
+            mvj[i].index = wk->cg_ja.bhix + wk->cg_ja.haix;
+            i++;
+        test1:
+            if (i < 8) {
+                goto loop1;
+            }
+    }
+}
+
+
+
+u32 decode_mvsw(flag)
+u16 flag;
+{
+    MVSW_BE mvsw;
+    mvsw.swi = flag;
+    if (flag & 0x1000) {
+        mvsw.swc[BE_BYTE(0, 4)] = mvsw.swc[BE_BYTE(1, 4)] = mvsw.swc[BE_BYTE(2, 4)];
+        mvsw.swc[BE_BYTE(0, 4)] >>= 2;
+        mvsw.swc[BE_BYTE(0, 4)] &= 3;
+        mvsw.swc[BE_BYTE(1, 4)] &= 3;
+    } else {
+        mvsw.sws.h = 0xFFFF;
+    }
+    if (flag & 0x10) {
+        mvsw.swc[BE_BYTE(2, 4)] = mvsw.swc[BE_BYTE(3, 4)];
+        mvsw.swc[BE_BYTE(2, 4)] >>= 2;
+        mvsw.swc[BE_BYTE(2, 4)] &= 3;
+        mvsw.swc[BE_BYTE(3, 4)] &= 3;
+    } else {
+        mvsw.sws.l = 0xFFFF;
+    }
+    return mvsw.swi;
+}
+
+
+
+void get_table_adrs_K5(WORK* wk) {
+    wk->cg_ja = wk->hit_ix_table[wk->cg_hit_ix];
+    wk->h_bod = &wk->body_adrs[wk->cg_ja.boix];
+    wk->h_han = &wk->hand_adrs[wk->cg_ja.bhix + wk->cg_ja.haix];
+}
+
+
+
+void init_K5_work(WORK* ewk, WORK* mwk, MVJ* mvj) {
+    s16 i;
+
+    for (i = 0; i < 10; i++) {
+        mvj[i].index = mvj[i].rno = 0;
+    }
+    ewk->cg_hit_ix = mwk->cg_hit_ix;
+    ewk->hit_ix_table = mwk->hit_ix_table;
+    ewk->body_adrs = mwk->body_adrs;
+    ewk->hand_adrs = mwk->hand_adrs;
+    mwk->K5_init_flag = 1;
+}
+
+
+
+void get_master_table_address(WORK* ewk, WORK* mwk) {
+    ewk->hit_ix_table = mwk->hit_ix_table;
+    ewk->body_adrs = mwk->body_adrs;
+    ewk->hand_adrs = mwk->hand_adrs;
+}
+
+
+
+void K5_init_data(WORK* mwk, MVJ* mvj, u16* ixtbl) {
+    s16 i;
+
+    for (i = 0; i < 8; i++) {
+        mvj[i].rno = 0;
+        mvj[i].index = ixtbl[lookup_index[i]];
+    }
+
+    K5_init_data_copy(mvj, (K5Data*)mwk->body_adrs[mwk->cg_ja.boix].body_dm, 4);
+    K5_init_data_copy(mvj + 4, (K5Data*)mwk->hand_adrs[mwk->cg_ja.bhix + mwk->cg_ja.haix].hand_dm, 4);
+}
+
+
+
+void K5_init_data_copy(MVJ* mvj, K5Data* dad, s16 num) {
+    s16 i;
+    for (i = 0; i < num; i++) {
+        mvj[i].r[0].pos.h = dad[i].data[0];
+        mvj[i].r[1].pos.h = dad[i].data[1];
+        mvj[i].r[2].pos.h = dad[i].data[2];
+        mvj[i].r[3].pos.h = dad[i].data[3];
+    }
+}
+
+
+void K5_init_data_copy2(K5Data* dad, MVJ* mvj, s16 num) {
+    s16 i;
+    for (i = 0; i < num; i++) {
+        dad[i].data[0] = mvj[i].r[0].pos.h;
+        dad[i].data[1] = mvj[i].r[1].pos.h;
+        dad[i].data[2] = mvj[i].r[2].pos.h;
+        dad[i].data[3] = mvj[i].r[3].pos.h;
+    }
+}
+
+
+
+s32 get_cal_work(WORK* wk) {
+    WORK* fwk;
+    s16 ix;
+    if ((ix = pull_effect_work(7)) == -1) {
+        return -1;
+    }
+    fwk = (WORK*)frw[ix];
+    wk->target_adrs = (u32*)fwk;
+    fwk->be_flag = 1;
+    fwk->id = 0xCD;
+    return 0;
+}
+
+
+
+void k5_add_sub(MVJ* mvj) {
+    s16 i;
+    for (i = 0; i < 4; i++) {
+        mvj->r[i].cal += mvj->a[i].sp;
+    }
+    for (i = 0; i < 4; i++) {
+        mvj->a[i].sp += mvj->d[i].sp;
+    }
+}
+
+
+
+s32 effect_K5_init(PLW* wk) {
+    WORK_Other* ewk;
+    s16 ix;
+    if (Bonus_Game_Flag == BONUS_CAR) {
+        return -1;
+    }
+    if ((ix = pull_effect_work(0)) == -1) {
+        return -1;
+    }
+    ewk = (WORK_Other*)frw[ix];
+    ewk->wu.be_flag = 1;
+    ewk->wu.id = 205;
+    ewk->wu.work_id = 0x10;
+    ewk->my_master = (u32*)wk;
+    wk->waku_ram_index = ewk->wu.myself;
+    return 0;
+}

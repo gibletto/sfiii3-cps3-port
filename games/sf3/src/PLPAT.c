@@ -1,0 +1,811 @@
+/*
+ * PLPAT.C  Player attack routines
+ *
+ * Player_attack is the attack state of a player work: it clears the per-attack flags, checks the
+ * jump guard type and dispatches on routine_no[2] to the common attack routines (Attack_00000 -
+ * 15000: normal, jump and command attacks) or, above 15, to the character's own table of special
+ * moves (the PLPATxx modules).
+ * Also here: jump-attack recovery timing (get_cjdR), cancel timers (get_cancel_timer), the
+ * hoken_muriyari_chakuchi, which forces a landing before a special starts.
+ */
+
+#include "structs.h"
+#include "work.h"
+#include "romdata.h"
+#include "extern.h"
+#include "PLNORMAL.h"
+#include "PLS02.h"
+#include "CALDIR.h"
+#include "CHARMOVE.h"
+#include "charmove_2.h"
+#include "PLS01.h"
+#include "EFFG6.h"
+#include "Grade.h"
+#include "PLS00.h"
+#include "PLSGAUGE.h"
+#include "PLPAT.h"
+
+/* ja_nmj_rno: the air attack check in check_ja_nmj_dummy_RTNM */
+#define NMJ_IDLE        0       /* on the ground, or until an attack or catch box is out */
+#define NMJ_ACTIVE      1       /* a box is out: until it is gone or the attack misses */
+#define NMJ_COUNT       2       /* count down ja_nmj_cnt; a new hit goes back to NMJ_ACTIVE */
+#define NMJ_DONE        3       /* (default) the count ran out: end the animation once the boxes are gone */
+
+/* routine_no[3], Attack_00000 */
+#define A00_CUE         1       /* run the animation to cue 20 */
+
+/* routine_no[3], Attack_01000 */
+#define A01_MOVE        1       /* move and run the animation to cue 1 */
+#define A01_AIR         2       /* in the air until it lands */
+#define A01_LAND        3       /* the landing */
+
+/* routine_no[3], Attack_02000 */
+#define A02_MOVE        1       /* move and run the animation to cue 1 */
+#define A02_MOVE2       2       /* move and run the animation */
+#define A02_CUE         3       /* run the animation to cue 1 */
+
+/* routine_no[3], Attack_03000 */
+#define A03_MOVE        1       /* move and run the animation */
+#define A03_AIR         2       /* in the air until it lands */
+#define A03_LAND        3       /* the landing */
+
+/* routine_no[3], Attack_04000 */
+#define A04_CUE         1       /* run the animation to cue 20 */
+
+/* routine_no[3], Attack_05000 */
+#define A05_MOVE        1       /* move and run the animation to cue 1 */
+#define A05_AIR         2       /* in the air until it lands */
+#define A05_LAND        3       /* the landing */
+
+/* routine_no[3], Attack_07000 */
+#define A07_CUE         1       /* run the animation to cue 20 */
+
+/* routine_no[3], Attack_08000 */
+#define A08_CUE         1       /* run the animation to cue 1 */
+#define A08_MOVE        2       /* move and run the animation */
+#define A08_RUN         3       /* run the animation */
+
+/* routine_no[3], Attack_09000 */
+#define A09_MOVE        1       /* move and run the animation to cue 1 */
+#define A09_AIR         2       /* in the air until it lands */
+#define A09_LAND        3       /* the landing */
+
+/* routine_no[3], Attack_10000 */
+#define A10_RUN         1       /* run the animation */
+#define A10_AIR         2       /* in the air until it lands */
+#define A10_WAIT        3       /* count down dir_timer */
+#define A10_AIR2        4       /* in the air until it lands */
+#define A10_LAND        5       /* the landing */
+
+/* routine_no[3], Attack_14000 */
+#define A14_RUN         1       /* run the animation */
+
+/* routine_no[3], Attack_15000 */
+#define A15_AIR         1       /* in the air until it lands */
+#define A15_AIR2        2       /* in the air until it lands */
+#define A15_LAND        3       /* the landing */
+/* 02007A88 */
+const u8* cjdr_karaburi_table[24] = {
+    cjdr_frame_tbl[3],  /* Gill */
+    cjdr_frame_tbl[3],  /* Alex */
+    cjdr_frame_tbl[3],  /* Ryu */
+    cjdr_frame_tbl[3],  /* Yun */
+    cjdr_frame_tbl[3],  /* Dudley */
+    cjdr_frame_tbl[3],  /* Necro */
+    cjdr_frame_tbl[3],  /* Hugo */
+    cjdr_frame_tbl[3],  /* Ibuki */
+    cjdr_frame_tbl[3],  /* Elena */
+    cjdr_frame_tbl[3],  /* Oro */
+    cjdr_frame_tbl[3],  /* Yang */
+    cjdr_frame_tbl[3],  /* Ken */
+    cjdr_frame_tbl[3],  /* Sean */
+    cjdr_frame_tbl[3],  /* Urien */
+    cjdr_frame_tbl[3],  /* Gouki */
+    cjdr_frame_tbl[3],  /* Shin Gouki */
+    cjdr_frame_tbl[3],  /* Chun-Li */
+    cjdr_frame_tbl[3],  /* Makoto */
+    cjdr_frame_tbl[3],  /* Q */
+    cjdr_frame_tbl[3],  /* Twelve */
+    cjdr_frame_tbl[3],  /* Remy */
+    cjdr_frame_tbl[3],  /* 21 */
+    cjdr_frame_tbl[3],  /* 22 */
+    cjdr_frame_tbl[3],  /* 23 */
+};
+/* 02007AE8 */
+const u8* cjdr_hits_table[24] = {
+    cjdr_frame_tbl[7],  /* Gill */
+    cjdr_frame_tbl[7],  /* Alex */
+    cjdr_frame_tbl[7],  /* Ryu */
+    cjdr_frame_tbl[7],  /* Yun */
+    cjdr_frame_tbl[7],  /* Dudley */
+    cjdr_frame_tbl[7],  /* Necro */
+    cjdr_frame_tbl[7],  /* Hugo */
+    cjdr_frame_tbl[7],  /* Ibuki */
+    cjdr_frame_tbl[7],  /* Elena */
+    cjdr_frame_tbl[7],  /* Oro */
+    cjdr_frame_tbl[7],  /* Yang */
+    cjdr_frame_tbl[7],  /* Ken */
+    cjdr_frame_tbl[7],  /* Sean */
+    cjdr_frame_tbl[7],  /* Urien */
+    cjdr_frame_tbl[7],  /* Gouki */
+    cjdr_frame_tbl[7],  /* Shin Gouki */
+    cjdr_frame_tbl[7],  /* Chun-Li */
+    cjdr_frame_tbl[7],  /* Makoto */
+    cjdr_frame_tbl[7],  /* Q */
+    cjdr_frame_tbl[7],  /* Twelve */
+    cjdr_frame_tbl[7],  /* Remy */
+    cjdr_frame_tbl[7],  /* 21 */
+    cjdr_frame_tbl[7],  /* 22 */
+    cjdr_frame_tbl[7],  /* 23 */
+};
+/* 02007B48 */
+const u8* cjdr_blocking_table[24] = {
+    cjdr_frame_tbl[8],  /* Gill */
+    cjdr_frame_tbl[9],  /* Alex */
+    cjdr_frame_tbl[9],  /* Ryu */
+    cjdr_frame_tbl[9],  /* Yun */
+    cjdr_frame_tbl[8],  /* Dudley */
+    cjdr_frame_tbl[10],  /* Necro */
+    cjdr_frame_tbl[9],  /* Hugo */
+    cjdr_frame_tbl[8],  /* Ibuki */
+    cjdr_frame_tbl[9],  /* Elena */
+    cjdr_frame_tbl[9],  /* Oro */
+    cjdr_frame_tbl[9],  /* Yang */
+    cjdr_frame_tbl[8],  /* Ken */
+    cjdr_frame_tbl[9],  /* Sean */
+    cjdr_frame_tbl[10],  /* Urien */
+    cjdr_frame_tbl[8],  /* Gouki */
+    cjdr_frame_tbl[8],  /* Shin Gouki */
+    cjdr_frame_tbl[9],  /* Chun-Li */
+    cjdr_frame_tbl[9],  /* Makoto */
+    cjdr_frame_tbl[9],  /* Q */
+    cjdr_frame_tbl[10],  /* Twelve */
+    cjdr_frame_tbl[9],  /* Remy */
+    cjdr_frame_tbl[8],  /* 21 */
+    cjdr_frame_tbl[8],  /* 22 */
+    cjdr_frame_tbl[8],  /* 23 */
+};
+/* 02007BA8 */
+const u8* cjdr_defense_table[24] = {
+    cjdr_frame_tbl[14],  /* Gill */
+    cjdr_frame_tbl[14],  /* Alex */
+    cjdr_frame_tbl[14],  /* Ryu */
+    cjdr_frame_tbl[14],  /* Yun */
+    cjdr_frame_tbl[14],  /* Dudley */
+    cjdr_frame_tbl[14],  /* Necro */
+    cjdr_frame_tbl[14],  /* Hugo */
+    cjdr_frame_tbl[14],  /* Ibuki */
+    cjdr_frame_tbl[14],  /* Elena */
+    cjdr_frame_tbl[14],  /* Oro */
+    cjdr_frame_tbl[14],  /* Yang */
+    cjdr_frame_tbl[14],  /* Ken */
+    cjdr_frame_tbl[14],  /* Sean */
+    cjdr_frame_tbl[14],  /* Urien */
+    cjdr_frame_tbl[14],  /* Gouki */
+    cjdr_frame_tbl[14],  /* Shin Gouki */
+    cjdr_frame_tbl[14],  /* Chun-Li */
+    cjdr_frame_tbl[14],  /* Makoto */
+    cjdr_frame_tbl[14],  /* Q */
+    cjdr_frame_tbl[14],  /* Twelve */
+    cjdr_frame_tbl[14],  /* Remy */
+    cjdr_frame_tbl[14],  /* 21 */
+    cjdr_frame_tbl[14],  /* 22 */
+    cjdr_frame_tbl[14],  /* 23 */
+};
+
+
+void Player_attack(PLW* wk) {
+    wk->wu.next_z = wk->wu.my_priority;
+    wk->running_f = 0;
+    wk->py->flag = 0;
+    wk->guard_flag = 3;
+    wk->guard_chuu = 0;
+    wk->tsukami_f = 0;
+    wk->tsukamare_f = 0;
+    wk->scr_pos_set_flag = 1;
+    wk->dm_hos_flag = 0;
+    wk->ukemi_success = 0;
+    wk->zuru_timer = 0;
+    wk->zuru_ix_counter = 0;
+    wk->sa_stop_flag = 0;
+    wk->ukemi_success = 0;
+    wk->ukemi_ok_timer = 0;
+    wk->uot_cd_ok_flag = 0;
+    wk->hazusenai_flag = 0;
+    wk->cat_break_reserve = 0;
+    check_em_tk_power_off(wk, (PLW*)wk->wu.target_adrs);
+    if (wk->wu.routine_no[3] == RN3_START) {
+        wk->caution_flag = 1;
+        wk->dm_vital_backup = 0;
+        wk->dm_vital_use = 0;
+        wk->total_att_hit_ok = 0;
+        wk->hsjp_ok = 0;
+    }
+    jumping_guard_type_check(wk);
+    if (wk->wu.routine_no[2] > 15) {
+        plxx_extra_attack_table[wk->player_number](wk);
+    } else {
+        wk->sa->saeff_ok = 0;
+        wk->sa->saeff_mp = 0;
+        plpat_lv_00[wk->wu.routine_no[2]](wk);
+    }
+    wk->wu.next_z = ((PLW*)wk->wu.target_adrs)->wu.my_priority - 3;
+    if (wk->wu.cg_prio) {
+        if (wk->wu.cg_prio == 1) {
+            wk->wu.next_z += 4;
+        } else {
+            wk->wu.next_z -= 4;
+        }
+    }
+}
+
+
+
+void Attack_00000(PLW* wk) {
+    wk->scr_pos_set_flag = 0;
+    switch (wk->wu.routine_no[3]) {
+    case RN3_START:
+        wk->wu.routine_no[3]++;
+        hoken_muriyari_chakuchi(wk);
+        wk->wu.rl_flag = wk->wu.rl_waza;
+        setup_lvdir_after_autodir(wk);
+        get_cancel_timer(wk);
+        set_char_move_init(&wk->wu, 4, wk->as->char_ix);
+        break;
+    case A00_CUE:
+        char_move(&wk->wu);
+        if (wk->wu.cg_type == 20) {
+            wk->wu.routine_no[2] = 4;
+            wk->wu.cg_type = 0;
+            wk->scr_pos_set_flag = 1;
+        }
+        break;
+    }
+}
+
+
+
+void Attack_01000(PLW* wk) {
+    switch (wk->wu.routine_no[3]) {
+    case RN3_START:
+        wk->wu.routine_no[3]++;
+        hoken_muriyari_chakuchi(wk);
+        wk->wu.rl_flag = wk->wu.rl_waza;
+        setup_lvdir_after_autodir(wk);
+        get_cancel_timer(wk);
+        set_char_move_init(&wk->wu, 4, wk->as->char_ix);
+        setup_mvxy_data(&wk->wu, wk->as->data_ix);
+        break;
+    case A01_MOVE:
+        char_move(&wk->wu);
+        if (wk->wu.cg_type == 1) {
+            add_mvxy_speed(&wk->wu);
+            wk->wu.routine_no[3] = A01_AIR;
+            wk->wu.cg_type = 0;
+        }
+        break;
+    case A01_AIR:
+        jumping_union_process(&wk->wu, 3);
+        break;
+    case A01_LAND:
+        char_move(&wk->wu);
+        break;
+    }
+}
+
+
+
+void Attack_02000(PLW* wk) {
+    switch (wk->wu.routine_no[3]) {
+    case RN3_START:
+        wk->wu.routine_no[3]++;
+        hoken_muriyari_chakuchi(wk);
+        wk->wu.rl_flag = wk->wu.rl_waza;
+        setup_lvdir_after_autodir(wk);
+        get_cancel_timer(wk);
+        set_char_move_init(&wk->wu, 4, wk->as->char_ix);
+        setup_mvxy_data(&wk->wu, wk->as->data_ix);
+        break;
+    case A02_MOVE:
+        char_move(&wk->wu);
+        if (wk->wu.cg_type == 1) {
+            add_mvxy_speed(&wk->wu);
+            wk->wu.routine_no[3] = A02_MOVE2;
+            wk->wu.cg_type = 0;
+        }
+        break;
+    case A02_MOVE2:
+        cal_mvxy_speed(&wk->wu);
+        add_mvxy_speed(&wk->wu);
+        /* fall through */
+    case A02_CUE:
+        char_move(&wk->wu);
+        if (wk->wu.cg_type == 1) {
+            reset_mvxy_data(&wk->wu);
+            wk->wu.cg_type = 0;
+        }
+        break;
+    }
+}
+
+
+
+void Attack_03000(PLW* wk) {
+    switch (wk->wu.routine_no[3]) {
+    case RN3_START:
+        wk->wu.routine_no[3]++;
+        get_cancel_timer(wk);
+        if ((Bonus_Game_Flag == BONUS_CAR && wk->bs2_on_car) || (wk->wu.xyz[1].disp.pos <= 0)) {
+            hoken_muriyari_chakuchi(wk);
+            wk->wu.rl_flag = wk->wu.rl_waza;
+            setup_lvdir_after_autodir(wk);
+            Normal_18000_init_unit(wk, wk->wu.pat_status);
+        }
+        set_char_move_init(&wk->wu, 4, wk->as->char_ix);
+        break;
+    case A03_MOVE:
+        if (wk->wu.mvxy.a[1].sp > 0) {
+            if (wk->wu.xyz[1].disp.pos < 16) {
+                add_mvxy_speed(&wk->wu);
+                cal_mvxy_speed(&wk->wu);
+                break;
+            }
+        }
+        wk->wu.routine_no[3]++;
+        /* fall through */
+    case A03_AIR:
+        jumping_union_process(&wk->wu, 3);
+        if (wk->wu.routine_no[3] == A03_LAND) {
+            break;
+        }
+        check_ja_nmj_dummy_RTNM(wk);
+        if (wk->wu.cg_type == 0x40) {
+            if (!(wk->spmv_ng_flag & 0x100000) && ja_nmj_rno_change(&wk->wu)) {
+                wk->wu.routine_no[1] = PLAYER_NORMAL;
+                wk->wu.routine_no[3] = A03_MOVE;
+            }
+            wk->wu.cg_type = 0;
+        }
+        break;
+    case A03_LAND:
+        char_move(&wk->wu);
+        break;
+    }
+}
+
+
+
+s32 ja_nmj_rno_change(WORK* wk) {
+    s16 rnum = 0;
+    switch (wk->pat_status) {
+    case 20:
+        wk->routine_no[2] = 21;
+        rnum = 1;
+        break;
+    case 14:
+        wk->routine_no[2] = 18;
+        rnum = 1;
+        break;
+    case 26:
+        wk->routine_no[2] = 24;
+        rnum = 1;
+        break;
+    case 22:
+        wk->routine_no[2] = 22;
+        rnum = 1;
+        break;
+    case 16:
+        wk->routine_no[2] = 19;
+        rnum = 1;
+        break;
+    case 28:
+        wk->routine_no[2] = 25;
+        rnum = 1;
+        break;
+    case 24:
+        wk->routine_no[2] = 23;
+        rnum = 1;
+        break;
+    case 18:
+        wk->routine_no[2] = 20;
+        rnum = 1;
+        break;
+    case 30:
+        wk->routine_no[2] = 26;
+        rnum = 1;
+        /* fall through */
+    default:
+        break;
+    }
+    return rnum;
+}
+
+
+
+void check_ja_nmj_dummy_RTNM(PLW* wk) {
+    if (wk->wu.xyz[1].disp.pos < 1) {
+        wk->ja_nmj_rno = NMJ_IDLE;
+        return;
+    }
+    switch (wk->ja_nmj_rno) {
+    case NMJ_IDLE:
+        if ((wk->wu.cg_ja.atix == 0) && (wk->wu.cg_ja.caix == 0)) {
+            break;
+        }
+        wk->ja_nmj_rno = NMJ_ACTIVE;
+        break;
+    case NMJ_ACTIVE:
+        if ((wk->wu.cg_ja.atix == 0) && (wk->wu.cg_ja.caix == 0)) {
+        } else if (wk->wu.att_hit_ok) {
+            break;
+        }
+        wk->ja_nmj_cnt = get_cjdR(wk);
+        wk->ja_nmj_rno = NMJ_COUNT;
+        break;
+    case NMJ_COUNT:
+        if ((wk->wu.cg_ja.atix == 0) && (wk->wu.cg_ja.caix == 0)) {
+        } else if (wk->wu.att_hit_ok) {
+            wk->ja_nmj_rno = NMJ_ACTIVE;
+            break;
+        }
+        if (--wk->ja_nmj_cnt) {
+            break;
+        }
+        wk->ja_nmj_rno = NMJ_DONE;
+        break;
+    default:
+        if ((wk->wu.cg_ja.atix == 0) && (wk->wu.cg_ja.caix == 0)) {
+            goto idle;
+        }
+        if (wk->wu.att_hit_ok) {
+            wk->ja_nmj_rno = NMJ_ACTIVE;
+        }
+        break;
+    idle:
+        if (wk->wu.cg_type == 0) {
+            wk->wu.cg_type = 64;
+        }
+        break;
+    }
+}
+
+
+
+s32 get_cjdR(PLW* wk) {
+    s16 w_ix = (wk->wu.kind_of_waza & 6) + ((wk->wu.hf.hit.player & 0xA2) != 0);
+    if (wk->wu.att_hit_ok) {
+    } else if (wk->wu.hf.hit.player != 0) {
+        if (wk->wu.hf.hit.player & 3) {
+            goto case1;
+        }
+        if (wk->wu.hf.hit.player & 0xC0) {
+            goto case2;
+        }
+        if (wk->wu.hf.hit.player & 0x30) {
+            goto case3;
+        }
+    }
+    return cjdr_karaburi_table[wk->player_number][w_ix];
+case1:
+    return cjdr_hits_table[wk->player_number][w_ix];
+case2:
+    return cjdr_blocking_table[wk->player_number][w_ix];
+case3:
+    return cjdr_defense_table[wk->player_number][w_ix];
+}
+
+
+
+void Attack_04000(PLW* wk) {
+    switch (wk->wu.routine_no[3]) {
+    case RN3_START:
+        wk->wu.routine_no[3]++;
+        hoken_muriyari_chakuchi(wk);
+        wk->wu.rl_flag = wk->wu.rl_waza;
+        setup_lvdir_after_autodir(wk);
+        get_cancel_timer(wk);
+        set_char_move_init(&wk->wu, 4, wk->as->char_ix);
+        break;
+    case A04_CUE:
+        char_move(&wk->wu);
+        if (wk->wu.cg_type == 20) {
+            wk->wu.routine_no[2] = 1;
+            wk->wu.cg_type = 0;
+            wk->scr_pos_set_flag = 0;
+        }
+        break;
+    }
+}
+
+
+
+void Attack_05000(PLW* wk) {
+    switch (wk->wu.routine_no[3]) {
+    case RN3_START:
+        wk->wu.rl_flag = wk->wu.rl_waza;
+        set_char_move_init(&wk->wu, 5, wk->as->char_ix);
+        if (wk->wu.xyz[1].disp.pos > 0) {
+            wk->wu.routine_no[3] = A05_AIR;
+            char_move_wca(&wk->wu);
+        } else {
+            hoken_muriyari_chakuchi(wk);
+            wk->wu.routine_no[3] = A05_MOVE;
+        }
+        wk->cancel_timer = 0;
+        break;
+    case A05_MOVE:
+        char_move(&wk->wu);
+        if (wk->wu.cg_type == 1) {
+            add_mvxy_speed(&wk->wu);
+            wk->wu.routine_no[3] = A05_AIR;
+            wk->wu.cg_type = 0;
+            effect_G6_init(&wk->wu, wk->wu.weight_level);
+        }
+        break;
+    case A05_AIR:
+        jumping_union_process(&wk->wu, 3);
+        break;
+    case A05_LAND:
+        char_move(&wk->wu);
+        break;
+    }
+}
+
+
+
+void Attack_06000(PLW* wk) {
+    wk->scr_pos_set_flag = 0;
+    Attack_07000(wk);
+}
+
+
+
+void Attack_07000(PLW* wk) {
+    switch (wk->wu.routine_no[3]) {
+    case RN3_START:
+        wk->wu.routine_no[3]++;
+        hoken_muriyari_chakuchi(wk);
+        get_cancel_timer(wk);
+        set_char_move_init(&wk->wu, 5, wk->as->char_ix);
+        if (wk->wu.cg_type == 20) {
+            wk->wu.cg_type = 0;
+            wk->wu.rl_flag = wk->wu.rl_waza;
+        }
+        break;
+    case A07_CUE:
+        char_move(&wk->wu);
+        if (wk->wu.cg_type == 20) {
+            wk->wu.cg_type = 0;
+            wk->wu.rl_flag = wk->wu.rl_waza;
+        }
+        break;
+    }
+}
+
+
+
+void Attack_08000(PLW* wk) {
+    s16 ixx;
+    switch (wk->wu.routine_no[3]) {
+    case RN3_START:
+        wk->wu.routine_no[3]++;
+        if (wk->wu.xyz[1].disp.pos <= 0) {
+            wk->wu.rl_flag = wk->wu.rl_waza;
+            wk->wu.xyz[1].disp.pos = 0;
+            ixx = ((wk->wu.pat_status - 20) / 2 & 3) + 9;
+            if (ixx > 11) {
+                ixx = 10;
+            }
+            setup_mvxy_data(&wk->wu, ixx);
+        }
+        get_cancel_timer(wk);
+        set_char_move_init(&wk->wu, 4, wk->as->char_ix);
+        wk->wu.mvxy.index = wk->as->data_ix;
+        break;
+    case A08_CUE:
+        char_move(&wk->wu);
+        if (wk->wu.cg_type == 1) {
+            wk->wu.routine_no[3]++;
+        }
+        if (wk->wu.cg_type == 20) {
+            setup_mvxy_data(&wk->wu, wk->wu.mvxy.index);
+            wk->wu.cg_type = 0;
+            wk->wu.mvxy.index++;
+        }
+        break;
+    case A08_MOVE:
+        jumping_union_process(&wk->wu, 3);
+        if ((wk->wu.routine_no[3] != A08_RUN) && (wk->wu.cg_type == 20)) {
+            add_to_mvxy_data(&wk->wu, wk->wu.mvxy.index);
+            wk->wu.cg_type = 0;
+            wk->wu.mvxy.index++;
+        }
+        break;
+    case A08_RUN:
+        char_move(&wk->wu);
+        break;
+    }
+}
+
+
+
+void Attack_09000(PLW* wk) {
+    switch (wk->wu.routine_no[3]) {
+    case RN3_START:
+        wk->wu.routine_no[3]++;
+        hoken_muriyari_chakuchi(wk);
+        get_cancel_timer(wk);
+        set_char_move_init(&wk->wu, 5, wk->as->char_ix);
+        setup_mvxy_data(&wk->wu, wk->as->data_ix);
+        if (wk->wu.cg_type == 20) {
+            wk->wu.cg_type = 0;
+            wk->wu.rl_flag = wk->wu.rl_waza;
+        }
+        break;
+    case A09_MOVE:
+        char_move(&wk->wu);
+        if (wk->wu.cg_type == 20) {
+            wk->wu.cg_type = 0;
+            wk->wu.rl_flag = wk->wu.rl_waza;
+        }
+        if (wk->wu.cg_type == 1) {
+            add_mvxy_speed(&wk->wu);
+            wk->wu.routine_no[3] = A09_AIR;
+            wk->wu.cg_type = 0;
+        }
+        break;
+    case A09_AIR:
+        jumping_union_process(&wk->wu, 3);
+        break;
+    case A09_LAND:
+        char_move(&wk->wu);
+        break;
+    }
+}
+
+
+
+void Attack_10000(PLW* wk) {
+    switch (wk->wu.routine_no[3]) {
+    case RN3_START:
+        wk->wu.routine_no[3]++;
+        hoken_muriyari_chakuchi(wk);
+        wk->wu.rl_flag = wk->wu.rl_waza;
+        set_char_move_init(&wk->wu, 5, wk->as->char_ix);
+        setup_mvxy_data(&wk->wu, wk->as->data_ix);
+        wk->cancel_timer = 0;
+        wk->wu.dir_timer = 3;
+        if (wk->wu.cg_type == 20) {
+            wk->wu.routine_no[3] = A10_AIR;
+        }
+        grade_add_leap_attack(wk->wu.id);
+        break;
+    case A10_RUN:
+        char_move(&wk->wu);
+        if (wk->wu.cg_type != 20) {
+            break;
+        }
+        wk->wu.routine_no[3]++;
+        /* fall through */
+    case A10_AIR:
+        jumping_union_process(&wk->wu, 4);
+        if (wk->wu.routine_no[3] == A10_AIR2) {
+            break;
+        }
+        if (!wk->wu.hf.hit.player) {
+            return;
+        }
+        if (wk->wu.hf.hit.player & 3) {
+            wk->wu.mvxy.a[0].sp /= 4;
+            wk->wu.routine_no[3] = A10_AIR2;
+            break;
+        }
+        if (wk->wu.hf.hit.player & 0x30) {
+            wk->wu.mvxy.a[0].sp /= 4;
+            wk->wu.mvxy.a[1].sp = 0;
+            wk->wu.routine_no[3] = A10_WAIT;
+            break;
+        }
+        if (wk->wu.hf.hit.player & 0xC0) {
+            wk->wu.mvxy.a[0].sp /= 2;
+            wk->wu.mvxy.a[0].sp = -wk->wu.mvxy.a[0].sp;
+            wk->wu.mvxy.a[1].sp = 0;
+            wk->wu.routine_no[3] = A10_AIR2;
+        }
+        break;
+    case A10_WAIT:
+        if (--wk->wu.dir_timer > 0) {
+            break;
+        }
+        wk->wu.routine_no[3] = A10_AIR2;
+        /* fall through */
+    case A10_AIR2:
+        jumping_union_process(&wk->wu, 5);
+        break;
+    case A10_LAND:
+        char_move(&wk->wu);
+        break;
+    }
+}
+
+
+
+void Attack_14000(PLW* wk) {
+    wk->scr_pos_set_flag = 0;
+    switch (wk->wu.routine_no[3]) {
+    case RN3_START:
+        wk->wu.routine_no[3]++;
+        hoken_muriyari_chakuchi(wk);
+        wk->wu.rl_flag = wk->wu.rl_waza;
+        wk->cat_break_ok_timer = 6;
+        setup_lvdir_after_autodir(wk);
+        set_char_move_init(&wk->wu, 4, wk->as->char_ix);
+        break;
+    case A14_RUN:
+        char_move(&wk->wu);
+        if (wk->cat_break_ok_timer) {
+            wk->cat_break_reserve = 1;
+        }
+        break;
+    }
+}
+
+
+
+void Attack_15000(PLW* wk) {
+    switch (wk->wu.routine_no[3]) {
+    case RN3_START:
+        wk->wu.routine_no[3]++;
+        if (wk->wu.xyz[1].disp.pos <= 0) {
+            wk->wu.rl_flag = wk->wu.rl_waza;
+            setup_lvdir_after_autodir(wk);
+            wk->wu.xyz[1].disp.pos = 0;
+            Normal_18000_init_unit(wk, wk->wu.pat_status);
+        }
+        wk->cat_break_ok_timer = 6;
+        set_char_move_init((WORK*)wk, 4, wk->as->char_ix);
+        break;
+    case A15_AIR:
+        if (wk->cat_break_ok_timer) {
+            wk->cat_break_reserve = 1;
+        }
+        if ((wk->wu.mvxy.a[1].sp > 0) && (wk->wu.xyz[1].disp.pos < 0)) {
+            add_mvxy_speed((WORK*)wk);
+            cal_mvxy_speed((WORK*)wk);
+            break;
+        }
+        wk->wu.routine_no[3]++;
+        /* fall through */
+    case A15_AIR2:
+        jumping_union_process((WORK*)wk, 3);
+        if ((wk->wu.routine_no[3] != A15_LAND) && wk->cat_break_ok_timer) {
+            wk->cat_break_reserve = 1;
+        }
+        break;
+    case A15_LAND:
+        char_move((WORK*)wk);
+        break;
+    }
+}
+
+
+
+void get_cancel_timer(PLW* wk) {
+    if (wk->tc_1st_flag) {
+        wk->cancel_timer = 0;
+    } else if (wk->wu.xyz[1].disp.pos > 0) {
+        wk->cancel_timer = 2;
+    } else {
+        wk->cancel_timer = 2;
+    }
+}
+
+
+
+void hoken_muriyari_chakuchi(PLW* wk) {
+    if ((Bonus_Game_Flag == BONUS_CAR) && wk->bs2_on_car) {
+        wk->wu.xyz[1].disp.pos = bs2_floor[2];
+    } else {
+        wk->wu.xyz[1].disp.pos = 0;
+    }
+}

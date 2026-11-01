@@ -1,0 +1,72 @@
+; ctr_video.g.pica  Geometry shader: turns one quad record into a rectangle (two triangles)
+;
+; It also outputs a fixed normal and view vector, so fragment lighting reads the texel as the palette index.
+
+.gsh point c0
+
+.fvec projection[4]
+.fvec eye                   ; x: this eye's pixel shift per unit of depth (0 in 2D)
+
+.constf consts(0.0, 1.0, -1.0, 0.5)
+.alias ones consts.yyyy
+.alias halves consts.wwww
+
+.out outpos position
+.out outtc0 texcoord0
+.out outquat normalquat
+.out outview view
+
+.alias inrect v0            ; (x0, y0, x1, y1)
+.alias tc v1                ; (u0, v0, u1, v1)
+.alias zin v2               ; x: z order; w: 3D depth
+.alias rect r2              ; the rectangle, shifted for this eye
+
+.entry gmain
+.proc gmain
+    ; 3D shift: depth times the eye's shift, rounded to whole pixels
+    mul r1, eye.xxxx, zin.wwww
+    add r1, halves, r1
+    flr r1, r1
+    mov r3.xz, r1.xx
+    mov r3.yw, consts.xx
+    add rect, inrect, r3
+
+    mov r0.z, zin.x
+    mov r0.w, ones
+
+    setemit 0
+    mov r0.xy, rect.xy
+    call corner
+    mov outtc0.xy, tc.xy
+    emit
+
+    setemit 1
+    mov r0.xy, rect.zy
+    call corner
+    mov outtc0.xy, tc.zy
+    emit
+
+    setemit 2, prim
+    mov r0.xy, rect.xw
+    call corner
+    mov outtc0.xy, tc.xw
+    emit
+
+    setemit 0, inv prim
+    mov r0.xy, rect.zw
+    call corner
+    mov outtc0.xy, tc.zw
+    emit
+    end
+.end
+
+; r0: the corner (x, y, z, 1)
+.proc corner
+    dp4 outpos.x, projection[0], r0
+    dp4 outpos.y, projection[1], r0
+    dp4 outpos.z, projection[2], r0
+    dp4 outpos.w, projection[3], r0
+    mov outtc0.zw, consts.xxxy
+    mov outquat, consts.xxxy
+    mov outview, consts.xxyx
+.end

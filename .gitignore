@@ -1,0 +1,6 @@
+/build/
+/build-3ds/
+/rom-data/
+__pycache__/
+*.bmp
+eeprom.bin

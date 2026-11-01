@@ -1,0 +1,263 @@
+/*
+ * SPGAUGE_TBL.C  super art gauge colours and palette fade lists
+ *
+ * sa_time_data_tbl holds the six frames of the gauge's time lettering for each side,
+ * sa_color_data2_tbl the gauge colours and sagauge_colchg_tbl the flash colours of the gauge;
+ * read by SPGAUGE.C. fade_adrs_tbl_0 .. fade_adrs_tbl_35 are the palette lists of the fades
+ * and fade_param_tbl their fade parameters, chosen through fade_data_tbl (SC_DATA3.C); read
+ * by SC_SUB_2.C.
+ */
+
+#include "types.h"
+#include "structs.h"
+
+#pragma section TBL
+
+extern const u32 fade_adrs_tbl_0[];
+extern const u32 fade_adrs_tbl_1[];
+extern const u32 fade_adrs_tbl_10[];
+extern const u32 fade_adrs_tbl_11[];
+extern const u32 fade_adrs_tbl_12[];
+extern const u32 fade_adrs_tbl_13[];
+extern const u32 fade_adrs_tbl_14[];
+extern const u32 fade_adrs_tbl_15[];
+extern const u32 fade_adrs_tbl_16[];
+extern const u32 fade_adrs_tbl_17[];
+extern const u32 fade_adrs_tbl_18[];
+extern const u32 fade_adrs_tbl_19[];
+extern const u32 fade_adrs_tbl_2[];
+extern const u32 fade_adrs_tbl_20[];
+extern const u32 fade_adrs_tbl_21[];
+extern const u32 fade_adrs_tbl_22[];
+extern const u32 fade_adrs_tbl_23[];
+extern const u32 fade_adrs_tbl_25[];
+extern const u32 fade_adrs_tbl_26[];
+extern const u32 fade_adrs_tbl_27[];
+extern const u32 fade_adrs_tbl_28[];
+extern const u32 fade_adrs_tbl_29[];
+extern const u32 fade_adrs_tbl_3[];
+extern const u32 fade_adrs_tbl_30[];
+extern const u32 fade_adrs_tbl_31[];
+extern const u32 fade_adrs_tbl_32[];
+extern const u32 fade_adrs_tbl_33[];
+extern const u32 fade_adrs_tbl_34[];
+extern const u32 fade_adrs_tbl_35[];
+extern const u32 fade_adrs_tbl_4[];
+extern const u32 fade_adrs_tbl_5[];
+extern const u32 fade_adrs_tbl_6[];
+extern const u32 fade_adrs_tbl_7[];
+extern const u32 fade_adrs_tbl_8[];
+extern const u32 fade_adrs_tbl_9[];
+
+
+const u16 sa_time_data_tbl[6][2] = {
+    { 0x800, 0x820 },
+    { 0x808, 0x828 },
+    { 0x810, 0x830 },
+    { 0x818, 0x838 },
+    { 0x810, 0x830 },
+    { 0x808, 0x828 },
+};
+
+const u16 sa_color_data2_tbl[3][2] = {
+    { 0x1A, 0x9A },
+    { 0x18, 0x98 },
+    { 0x1A, 0x9A },
+};
+
+const u16 sagauge_colchg_tbl[4][2] = {
+    { 0x22, 0xA2 },
+    { 0x24, 0xA4 },
+    { 0x26, 0xA6 },
+    { 0x24, 0xA4 },
+};
+
+const u32 fade_adrs_tbl_17[1] = {
+    0x5,
+};
+
+const u32 fade_adrs_tbl_18[2] = {
+    0x4, 0x2,
+};
+
+const u32 fade_adrs_tbl_19[1] = {
+    0x4,
+};
+
+const u32 fade_adrs_tbl_20[1] = {
+    0x2,
+};
+
+const u32 fade_adrs_tbl_21[1] = {
+    0xA,
+};
+
+const u32 fade_adrs_tbl_13[1] = {
+    0x28,
+};
+
+const u32 fade_adrs_tbl_22[1] = {
+    0x82,
+};
+
+const u32 fade_adrs_tbl_25[1] = {
+    0x27,
+};
+
+const u32 fade_adrs_tbl_34[1] = {
+    0x30,
+};
+
+const u32 fade_adrs_tbl_14[1] = {
+    0x29,
+};
+
+const u32 fade_adrs_tbl_16[1] = {
+    0x2F,
+};
+
+const u32 fade_adrs_tbl_10[1] = {
+    0x22,
+};
+
+const u32 fade_adrs_tbl_26[1] = {
+    0x13,
+};
+
+const u32 fade_adrs_tbl_2[1] = {
+    0x18,
+};
+
+const u32 fade_adrs_tbl_9[1] = {
+    0x1F,
+};
+
+const u32 fade_adrs_tbl_6[1] = {
+    0x1C,
+};
+
+const u32 fade_adrs_tbl_1[1] = {
+    0x15,
+};
+
+const u32 fade_adrs_tbl_7[1] = {
+    0x1D,
+};
+
+const u32 fade_adrs_tbl_11[1] = {
+    0x23,
+};
+
+const u32 fade_adrs_tbl_4[1] = {
+    0x1A,
+};
+
+const u32 fade_adrs_tbl_3[1] = {
+    0x19,
+};
+
+const u32 fade_adrs_tbl_0[1] = {
+    0x14,
+};
+
+const u32 fade_adrs_tbl_8[1] = {
+    0x1E,
+};
+
+const u32 fade_adrs_tbl_28[1] = {
+    0x12,
+};
+
+const u32 fade_adrs_tbl_12[1] = {
+    0x24,
+};
+
+const u32 fade_adrs_tbl_15[1] = {
+    0x2B,
+};
+
+const u32 fade_adrs_tbl_5[1] = {
+    0x1B,
+};
+
+const u32 fade_adrs_tbl_29[1] = {
+    0x84,
+};
+
+const u32 fade_adrs_tbl_27[1] = {
+    0x91,
+};
+
+const u32 fade_adrs_tbl_23[1] = {
+    0x86,
+};
+
+const u32 fade_adrs_tbl_30[1] = {
+    0xB4,
+};
+
+const u32 fade_adrs_tbl_31[3] = {
+    0x5, 0x59, 0x86,
+};
+
+const u32 fade_adrs_tbl_32[2] = {
+    0x2A, 0x81,
+};
+
+const u32 fade_adrs_tbl_33[2] = {
+    0x5, 0x59,
+};
+
+const u32 fade_adrs_tbl_35[43] = {
+    0x93, 0x7B, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0,
+};
+
+const s16 fade_param_tbl[42][6] = {
+    { 2, 31, 15, 0, 2, -1 },
+    { 3, 31, 15, 0, 2, -1 },
+    { 1, 31, 0, 2, 1, -32 },
+    { 2, 31, 0, 0, 2, -1 },
+    { 2, 0, 31, 1, 2, 1 },
+    { 1, 31, 15, 0, 2, -1 },
+    { 1, 31, 0, 0, 2, -1 },
+    { 1, 0, 31, 1, 2, 1 },
+    { 1, 0, 31, 3, 1, 10 },
+    { 1, 31, 0, 0, 1, -4 },
+    { 1, 31, 0, 2, 3, -1 },
+    { 1, 0, 31, 3, 1, 2 },
+    { 1, 31, 0, 2, 1, -8 },
+    { 1, 20, 31, 3, 1, 6 },
+    { 1, 0, 31, 3, 1, 32 },
+    { 1, 31, 0, 2, 1, -16 },
+    { 1, 31, 0, 2, 1, -1 },
+    { 1, 0, 31, 3, 1, 2 },
+    { 1, 31, 0, 2, 1, -2 },
+    { 1, 0, 31, 3, 2, 1 },
+    { 1, 0, 31, 1, 1, 2 },
+    { 1, 31, 0, 0, 1, -2 },
+    { 1, 31, 0, 2, 1, -1 },
+    { 1, 0, 31, 3, 1, 1 },
+    { 1, 0, 31, 1, 2, 1 },
+    { 1, 31, 0, 0, 1, -32 },
+    { 1, 0, 31, 1, 4, 1 },
+    { 1, 31, 0, 0, 1, -2 },
+    { 1, 22, 31, 1, 4, 1 },
+    { 1, 0, 31, 1, 1, 32 },
+    { 1, 31, 0, 0, 1, -8 },
+    { 1, 0, 31, 3, 2, 1 },
+    { 1, 31, 0, 0, 1, -16 },
+    { 1, 31, 0, 2, 2, -1 },
+    { 2, 31, 19, 0, 2, -1 },
+    { 3, 31, 19, 0, 2, -1 },
+    { 3, 31, 17, 0, 2, -1 },
+    { 3, 31, 0, 0, 1, -1 },
+    { 3, 0, 31, 1, 1, 1 },
+    { 2, 31, 0, 0, 1, -1 },
+    { 2, 31, 0, 0, 1, -1 },
+    { 2, 31, 0, 0, 1, -32 },
+};
