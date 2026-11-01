@@ -114,7 +114,8 @@ if(WIN32)
 endif()
 
 if(NINTENDO_3DS)
-    ctr_create_3dsx(sf3 "SF III 3rd Strike" "CPS3 port" ${PORT}/ctr/romfs)
+    ctr_create_3dsx(sf3 "SF III 3rd Strike" "CPS3 port" ${PORT}/ctr/cia/icon.png ${PORT}/ctr/romfs)
+    ctr_create_cia(sf3 "SF III 3rd Strike" "Street Fighter III 3rd Strike (CPS3 port)" ${PORT}/ctr/cia ${PORT}/ctr/romfs)
 
     # PICA200 shaders (vertex, then geometry), assembled and embedded as a C header (<name>_shbin)
     function(ctr_shader target pica)

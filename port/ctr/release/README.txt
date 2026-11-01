@@ -23,17 +23,24 @@ This writes bios.bin, cg.bin and user5.bin into rom-data.
 Copy the contents of the sd folder to the root of the SD card, then put the three files from step 1 in
 sdmc:/sf3/rom-data/:
 
-    sdmc:/3ds/sf3.3dsx
     sdmc:/sf3/rom-data/bios.bin
     sdmc:/sf3/rom-data/cg.bin
     sdmc:/sf3/rom-data/user5.bin
+
+Then either install the CIA or use the 3dsx:
+
+- sf3.cia (recommended): copy it to the SD card and install it with FBI. The game gets its own icon on the
+  HOME Menu. On an original 3DS it asks for the larger 80 MB memory mode, so it keeps more of the graphics in
+  memory and reads the SD card less.
+- sdmc:/3ds/sf3.3dsx: start it from the Homebrew Launcher. Nothing to install.
 
 Sound needs the 3DS's DSP firmware, which can't be included. Run the DSP1 homebrew once: it saves it as
 sdmc:/3ds/dspfirm.cdc. Without it the game runs silent.
 
 3. Play
 -------
-Start "SF III 3rd Strike" from the Homebrew Launcher. It takes a few seconds to load.
+Start "SF III 3rd Strike" from the HOME Menu (CIA) or the Homebrew Launcher (3dsx). It takes a few seconds to
+load.
 
     D-pad / Circle Pad   move
     Y  X  L              light / medium / heavy punch

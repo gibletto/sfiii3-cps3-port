@@ -43,9 +43,13 @@ arcade board.
 
 An original 3DS has a 268 MHz processor and 64 MB of memory for the game. The arcade game needs more than that.
 
-**Memory.** The game's graphics alone take 64 MB. The port keeps about 30 MB of them in memory and reads the
+**Memory.** The game's graphics alone take 64 MB. The port keeps as many of them in memory as fits and reads the
 rest from the SD card as needed. A background thread guesses what comes next and reads it early, so the game
 rarely waits for the card.
+
+How much fits depends on how the game is started. The CIA asks the 3DS for its 80 MB memory mode (the HOME
+Menu still works), which leaves room for about 40 MB of the graphics. The 3dsx gets the usual 64 MB, enough for
+about 24 MB. A New 3DS has room for all of it.
 
 **Graphics.** This is where most of the work went.
 

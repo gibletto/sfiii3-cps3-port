@@ -1,7 +1,7 @@
 name: 3DS release
 
-# Builds the 3DS version and attaches the zip to the release. Run it by hand to build without a release, or
-# with a tag to (re)attach the zip to that release.
+# Builds the 3DS version (.3dsx and .cia) and attaches the zip to the release. Run it by hand to build without a
+# release, or with a tag to (re)attach the zip to that release.
 on:
   release:
     types: [published]
@@ -25,13 +25,11 @@ jobs:
     timeout-minutes: 30
     container:
       image: devkitpro/devkitarm:20260610@sha256:116afba8df8453961de2936ffab20dd441edf4d682856c1ec8b0e53d7ed0bbf5
-    outputs:
-      name: ${{ steps.package.outputs.name }}
     steps:
       - name: Install build tools
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends cmake ninja-build python3 zip git
+          apt-get install -y --no-install-recommends cmake ninja-build python3 git
           test -f "$DEVKITPRO/portlibs/3ds/lib/libz.a" || { echo "3ds-zlib is missing from the image"; exit 1; }
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
@@ -45,6 +43,56 @@ jobs:
           cmake -G Ninja -B build-3ds -DCMAKE_TOOLCHAIN_FILE=port/cmake/3ds-native.cmake -DDEVKITPRO="$DEVKITPRO"
           ninja -C build-3ds sf3
 
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: build-3ds
+          path: |
+            build-3ds/sf3
+            build-3ds/sf3.3dsx
+          if-no-files-found: error
+          retention-days: 7
+
+  # makerom needs a newer glibc than the devkitPro image has, so the CIA is made on the runner itself
+  package:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      name: ${{ steps.package.outputs.name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.release.tag_name || inputs.tag || github.ref }}
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: build-3ds
+          path: build-3ds
+
+      - name: Get makerom and bannertool
+        run: |
+          mkdir -p tools-bin && cd tools-bin
+          curl -fsSL -o makerom.zip https://github.com/3DSGuy/Project_CTR/releases/download/makerom-v0.19.0/makerom-v0.19.0-ubuntu_x86_64.zip
+          curl -fsSL -o bannertool.zip https://github.com/diasurgical/bannertool/releases/download/1.2.0/bannertool.zip
+          sha256sum -c <<'SUMS'
+          287b809dec064e0ad597e3d272c49ecb7eed41693d5ee6fef9d8a8aa24c2497e  makerom.zip
+          69768596f836acb3e3aeaa66e47c6ba560dde813c6dfcd33c8afc25fe29b7524  bannertool.zip
+          SUMS
+          unzip -q makerom.zip makerom
+          unzip -q -j bannertool.zip linux-x86_64/bannertool
+          chmod +x makerom bannertool
+
+      - name: Make the CIA
+        # the same steps as ctr_create_cia in port/cmake/3ds-native.cmake
+        run: |
+          dir=port/ctr/cia
+          tools-bin/bannertool makebanner -i $dir/banner.png -a $dir/banner.wav -o build-3ds/sf3.bnr
+          tools-bin/bannertool makesmdh -s "SF III 3rd Strike" -l "Street Fighter III 3rd Strike (CPS3 port)" \
+            -p "sfiii3-cps3-port" -i $dir/icon.png -o build-3ds/sf3.cia.smdh
+          tools-bin/makerom -f cia -o build-3ds/sf3.cia -target t -exefslogo -elf build-3ds/sf3 \
+            -rsf $dir/sf3.rsf -icon build-3ds/sf3.cia.smdh -banner build-3ds/sf3.bnr -DAPP_ROMFS=port/ctr/romfs
+
       - name: Package
         id: package
         env:
@@ -55,6 +103,7 @@ jobs:
           dir="dist/$name"
           mkdir -p "$dir/sd/3ds" "$dir/sd/sf3/rom-data" "$dir/tools"
           cp build-3ds/sf3.3dsx "$dir/sd/3ds/"
+          cp build-3ds/sf3.cia "$dir/"
           touch "$dir/sd/sf3/rom-data/PUT bios.bin cg.bin user5.bin HERE.txt"
           cp port/ctr/release/README.txt "$dir/"
           cp port/tools/prepare_rom.py games/sf3/tools/cps3rom.py "$dir/tools/"
@@ -74,7 +123,7 @@ jobs:
           retention-days: 30
 
   publish:
-    needs: build
+    needs: package
     if: github.event_name == 'release' || inputs.tag != ''
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -83,7 +132,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: ${{ needs.build.outputs.name }}
+          name: ${{ needs.package.outputs.name }}
           path: assets
 
       - name: Attach to the release

@@ -48,8 +48,11 @@ CMake works:
     cmake -G Ninja -B build-3ds -DCMAKE_TOOLCHAIN_FILE=port/cmake/3ds-native.cmake
     ninja -C build-3ds
 
-This builds `build-3ds/sf3.3dsx`. See the README in a [release](https://github.com/gibletto/sfiii3-cps3-port/releases)
-for how to set up the SD card.
+This builds `build-3ds/sf3.3dsx`. If [makerom](https://github.com/3DSGuy/Project_CTR) and
+[bannertool](https://github.com/diasurgical/bannertool) are on the PATH (or given with `-DCTR_MAKEROM=` and
+`-DCTR_BANNERTOOL=`), it also builds `build-3ds/sf3.cia`, an installable title that uses the Old 3DS's 80 MB
+memory mode. See the README in a [release](https://github.com/gibletto/sfiii3-cps3-port/releases) for how to set
+up the SD card.
 
 | 3DS buttons | |
 |---|---|

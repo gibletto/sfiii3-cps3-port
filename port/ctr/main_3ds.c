@@ -32,6 +32,10 @@
 #define USER5_PAGES     4096        /* graphics ROM cache in 16 KB pages: as many as memory allows */
 #define USER5_RESERVE   (4u << 20)  /* memory left free for later allocations (task stacks) */
 
+/* The GPU's memory (textures, framebuffers, command and sound buffers) needs about 12.5 MB. libctru's default
+   gives it up to 32 MB; the rest is better spent on the graphics ROM cache, which comes from the normal heap. */
+u32 __ctru_linear_heap_size = 16u << 20;
+
 static PrintConsole con;
 static u32 coin_frames;             /* a coin holds the switch for a few frames */
 static int select_combo;            /* SELECT was used with another button: no coin on release */
