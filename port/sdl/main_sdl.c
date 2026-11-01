@@ -32,6 +32,8 @@ void host_divzero_install(void);
 
 static SDL_GameController* pads[2];
 
+#define TRIGGER_ON  1000    /* of 32767: any press of the trigger, above the noise some pads have at rest */
+
 static u32 pad_input(SDL_GameController* c) {
     static const struct {
         SDL_GameControllerButton b;
@@ -55,7 +57,7 @@ static u32 pad_input(SDL_GameController* c) {
             in |= map[i].in;
         }
     }
-    if (SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_TRIGGERRIGHT) > 16000) {
+    if (SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_TRIGGERRIGHT) > TRIGGER_ON) {
         in |= CPS3_IN_HK;
     }
     x = SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_LEFTX);
