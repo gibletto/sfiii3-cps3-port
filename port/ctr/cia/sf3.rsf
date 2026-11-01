@@ -64,7 +64,7 @@ AccessControlInfo:
   MemoryType                    : Application # Application/System/Base
   SystemMode                    : 80MB # Old 3DS: 80MB leaves the HOME Menu working (96MB does not)
   IdealProcessor                : 0
-  AffinityMask                  : 1
+  AffinityMask                  : 3 # cores 0 and 1: the read-ahead thread runs on core 1
   Priority                      : 16
   MaxCpu                        : 0x9E # Default
   HandleTableSize               : 0x200

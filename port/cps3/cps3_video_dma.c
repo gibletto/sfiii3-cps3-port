@@ -268,6 +268,67 @@ void cps3_chr_dma_work(u32 bytes) {
     }
 }
 
+/* Is graphics ROM page p in memory (or past the ROM's end, where it reads as zero)? */
+static int src_loaded(u32 p) {
+    return p >= CPS3_USER5_PAGES || cps3_user5_page[p] != NULL || p * SRC_PAGE_BYTES >= cps3_user5_file_size();
+}
+
+int cps3_chr_dma_work_loaded(u32 bytes) {
+    while (cps3_chr_jobs > 0) {
+        ChrJob* j = &jobs[0];
+        u32 before = j->out;
+        u32 done, p, last, span;
+        /* a source byte makes at least one output byte; a run can overshoot the budget by CHR_RUN_OVER */
+        span = j->end - j->out < bytes + CHR_RUN_OVER ? j->end - j->out : bytes + CHR_RUN_OVER;
+        last = (j->src + (span ? span - 1 : 0)) / SRC_PAGE_BYTES;
+        for (p = j->src / SRC_PAGE_BYTES; p <= last; p++) {
+            if (!src_loaded(p)) {
+                cps3_user5_soon(p);
+                return 0;
+            }
+        }
+        job_run(j, bytes);
+        done = j->out - before;
+        if (j->out >= j->end) {
+            job_remove(0);
+        }
+        if (done >= bytes) {
+            return 1;
+        }
+        bytes -= done;
+    }
+    return 1;
+}
+
+/* The first job's next pages, then the first pages of the jobs after it. A job reads no more source bytes than it
+   writes, so its pages end by src + (end - out). */
+u32 cps3_chr_dma_upcoming(u32* pages, u32 max) {
+    u32 n = 0, k;
+    for (k = 0; k < cps3_chr_jobs && n < max; k++) {
+        const ChrJob* j = &jobs[k];
+        u32 first = j->src / SRC_PAGE_BYTES;
+        u32 last = (j->src + (j->end - j->out)) / SRC_PAGE_BYTES;
+        u32 look = k == 0 ? 8 : 2, p;
+        for (p = first; p <= last && p < first + look && n < max; p++) {
+            pages[n++] = p;
+        }
+    }
+    return n;
+}
+
+/* Are the pages a transfer of `length` output bytes from src reads all loaded? Asks for the missing ones. */
+static int src_range_loaded(u32 src, u32 length) {
+    u32 p, last = (src + (length ? length - 1 : 0)) / SRC_PAGE_BYTES;
+    int all = 1;
+    for (p = src / SRC_PAGE_BYTES; p <= last; p++) {
+        if (!src_loaded(p)) {
+            cps3_user5_soon(p);
+            all = 0;
+        }
+    }
+    return all;
+}
+
 void cps3_chr_dma_flush(void) {
     while (cps3_chr_jobs > 0) {
         job_finish(0);
@@ -314,8 +375,10 @@ static void char_dma6(u32 src, u32 dst, u32 length) {
         do_char_dma(src, dst, length);
         return;
     }
-    if (!cps3_chr_dma_defer || (length < CHR_DEFER_MIN && cps3_chr_jobs == 0)) {
-        /* Small per-frame animation loads run now. Large scene loads are queued. */
+    if (!cps3_chr_dma_defer || (length < CHR_DEFER_MIN && cps3_chr_jobs == 0 && src_range_loaded(src, length))) {
+        /* Small per-frame animation loads run now. Large scene loads are queued, and so are small ones whose
+           source is still on the SD card: it is read while the game runs on, and the renderer finishes the
+           transfer (cps3_chr_dma_need) if the tiles are shown first. */
         j = &now;
     } else {
         if (cps3_chr_jobs == CHR_JOBS) {

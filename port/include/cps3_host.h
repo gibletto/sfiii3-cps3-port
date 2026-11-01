@@ -53,6 +53,7 @@ typedef struct {
     int (*take)(u32 page, void* dst);
     void (*ahead)(u32 page);
     void (*want)(u32 page);     /* urgent: fetch this page first */
+    int (*read)(u32 page, void* dst);   /* read it now, faster than stdio; 0 if it could not */
 } Cps3User5Reader;
 void cps3_user5_set_reader(const Cps3User5Reader* r);
 int cps3_user5_cached(u32 page);
@@ -134,6 +135,10 @@ static inline int cps3_char_tile_pending(u32 tile) {
     return cps3_chr_jobs > 0 && ((cps3_char_pending[tile >> 3] >> (tile & 7)) & 1);
 }
 void cps3_chr_dma_work(u32 bytes);
+/* cps3_chr_dma_work while the source pages are loaded: 0 if it stopped at a page that is still being read */
+int cps3_chr_dma_work_loaded(u32 bytes);
+/* the graphics ROM pages the queued transfers read next, in order; returns how many */
+u32 cps3_chr_dma_upcoming(u32* pages, u32 max);
 void cps3_chr_dma_need(u32 tile);
 void cps3_chr_dma_flush(void);
 

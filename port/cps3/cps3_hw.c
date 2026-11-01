@@ -88,6 +88,8 @@ u32* cps3_user5_fault(u32 page) {
     mem = claim_slot(page);
     if (user5_reader != NULL && user5_reader->take(page, mem)) {
         /* read ahead */
+    } else if (user5_reader != NULL && user5_reader->read != NULL && user5_reader->read(page, mem)) {
+        /* read by the reader */
     } else {
         u32 want = ofs + PAGE_BYTES <= user5_file_size ? PAGE_BYTES : user5_file_size - ofs;
         size_t got;

@@ -45,6 +45,19 @@ target_compile_options(sf3_game PRIVATE
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86|i686|AMD64|i386")
     target_compile_options(sf3_game PRIVATE -malign-data=abi)
 endif()
+# Optimised (-O2), except the files with functions that can return without a value: those stay at -O0, so the
+# value left in the return register is the one the earlier builds gave (checked frame by frame and by sound).
+target_compile_options(sf3_game PRIVATE -O2)
+set(GAME_O0_FILES
+    CHARMOVE.c Ck_Pass.c Com_Pl.c Com_Sub.c EFF10.c EFF18.c EFF21.c EFF26.c EFF27.c EFF41.c EFF44.c EFF70.c EFF71.c
+    EFF72.c EFF78.c EFF85.c EFFC4.c EFFC6.c EFFD0.c EFFE2.c EFFECT.c EFFF2_code.c EFFG5.c EFFI7.c EFFI9.c EFFL4.c
+    EFFM2.c EFFM7.c Eff59.c EffK6.c Grade.c PLSGAUGE.c SYS_sub.c VITAL.c aboutspr.c bg_sub_2.c cmd_main_2.c
+    continue.c eeprom.c eff05.c eff06.c eff12.c eff28.c eff73.c eff87.c eff88.c eff94.c effL2.c effL3.c effL7.c
+    effM6.c effe9.c efff7.c effj4.c effl8.c entry_2.c n_input.c next_cpu.c sc_sub.c sc_sub_2.c sc_trans.c
+    scrn_ctrl.c se_3.c textsound_2.c)
+foreach(f ${GAME_O0_FILES})
+    set_source_files_properties(${GAME}/src/${f} PROPERTIES COMPILE_OPTIONS -O0)
+endforeach()
 
 # the board: memory, kernel, video, sound, EEPROM
 set(CPS3_SOURCES
@@ -92,7 +105,7 @@ else()
     set(SYM_PREFIX "_")     # i686 C symbols have a leading underscore
 endif()
 target_include_directories(sf3 PRIVATE ${PORT}/sys)
-target_compile_options(sf3 PRIVATE -std=gnu17 -fwrapv -fno-strict-aliasing -fsigned-char -Wall -Wno-unused-variable)
+target_compile_options(sf3 PRIVATE -O2 -std=gnu17 -fwrapv -fno-strict-aliasing -fsigned-char -Wall -Wno-unused-variable)
 
 # symbol aliases from the original link script (sf3.sub)
 set(SF3_DEFSYMS

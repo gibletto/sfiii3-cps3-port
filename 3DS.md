@@ -45,12 +45,17 @@ An original 3DS has a 268 MHz processor and 64 MB of memory for the game. The ar
 
 **Memory.** The game's graphics alone take 64 MB. The first time the game runs, it unpacks the ROM set zip into
 plain files on the SD card ("One-time ROM unpack"), so it can read any part of them quickly. The port keeps as
-many of the graphics in memory as fits and reads the rest from the SD card as needed. A background thread
-guesses what comes next and reads it early, so the game rarely waits for the card.
+many of the graphics in memory as fits and reads the rest from the SD card as needed. A background thread on
+the 3DS's second core guesses what comes next and reads it early, including everything a scene load has queued,
+so the game rarely waits for the card. When it does, a read takes about 4.5 ms.
 
 How much fits depends on how the game is started. The CIA asks the 3DS for its 80 MB memory mode (the HOME
-Menu still works), which leaves room for about 40 MB of the graphics. The 3dsx gets the usual 64 MB, enough for
-about 24 MB. A New 3DS has room for all of it.
+Menu still works), which leaves room for about 34 MB of the graphics. The 3dsx gets the usual 64 MB, enough for
+about 27 MB. A New 3DS has room for all of it.
+
+**Speed.** On a New 3DS set to Old 3DS speed (268 MHz, no L2 cache, the CIA's 80 MB mode), fights run at the full
+60 frames a second. The one visible hitch is a fraction of a second as a fight starts, while both fighters'
+graphics come off the SD card.
 
 **Graphics.** This is where most of the work went.
 
@@ -74,7 +79,11 @@ A few more tricks keep the processor's work small:
 - **Shadows** are marked in the stencil buffer, and the pixels under them are redrawn with the darker palette.
 - **Only what changed.** Graphics are copied to the graphics chip only when the game changes them.
 - **Loading in spare time.** Between scenes the game unpacks a lot of graphics at once. The port spreads that
-  work into the time each frame spends waiting for the screen to refresh.
+  work into the time each frame spends waiting for the screen to refresh, and a load whose data is still on the
+  SD card waits for it there instead of holding up the game.
+- **An optimised build.** The port and the game are compiled with optimisation, except the few game files whose
+  results depend on unoptimised code (functions that end without returning a value). Those stay as they were,
+  so the game plays exactly as before.
 
 ## Building it yourself
 

@@ -28,6 +28,7 @@
 #include "ctr_video.h"
 #include "ctr_depth.h"
 #include "ctr_video_shbin.h"
+#include "ctr_prefetch.h"
 
 #define DISPLAY_TRANSFER_FLAGS                                                                                   \
     (GX_TRANSFER_FLIP_VERT(0) | GX_TRANSFER_OUT_TILED(0) | GX_TRANSFER_RAW_COPY(0) |                            \
@@ -635,7 +636,16 @@ static void sync_char(void) {
         hi[b] = 0;
     }
     for (i = 0; i < sizeof(cps3_char_dirty); i++) {
-        u32 bits = cps3_char_dirty[i];
+        u32 bits;
+        if ((i & 3) == 0 && i + 4 <= sizeof(cps3_char_dirty)) {
+            u32 word;
+            memcpy(&word, &cps3_char_dirty[i], 4);
+            if (word == 0) {
+                i += 3;                 /* mostly zero: skip a word at a time */
+                continue;
+            }
+        }
+        bits = cps3_char_dirty[i];
         if (bits == 0) {
             continue;
         }
@@ -685,13 +695,26 @@ static u8 ss_byte(u32 n) {
     return (u8)cps3_ss_ram[n & 0x7FFF];
 }
 
+/* do two 64-byte tiles differ? (both word aligned) */
+static int tile64_differs(const u32* a, const u32* b) {
+    u32 d = 0, i;
+    __builtin_prefetch(a + 16);
+    __builtin_prefetch(b + 16);
+    for (i = 0; i < 16; i += 4) {
+        d |= (a[i] ^ b[i]) | (a[i + 1] ^ b[i + 1]) | (a[i + 2] ^ b[i + 2]) | (a[i + 3] ^ b[i + 3]);
+    }
+    return d != 0;
+}
+
 /* converts the text layer's 4-bit tiles into an 8-bit texture */
 static void sync_fg(void) {
     u32 t;
     int changed = 0;
+    const int aligned = (((uintptr_t)&cps3_ss_ram[0x4000] | (uintptr_t)fg_prev) & 3) == 0;
     for (t = 0; t < 512; t++) {
         const u16* src = &cps3_ss_ram[0x4000 + t * 32];
-        if (memcmp(src, &fg_prev[t * 32], 64) != 0) {
+        if (aligned ? tile64_differs((const u32*)src, (const u32*)&fg_prev[t * 32])
+                    : memcmp(src, &fg_prev[t * 32], 64) != 0) {
             u8* dst = (u8*)fg_tex.data + t * 64;
             u32 x, y, any = 0;
             memcpy(&fg_prev[t * 32], src, 64);
@@ -1037,7 +1060,11 @@ void ctr_video_render(void) {
     start_count[1] = C3D_FrameCounter(1);
     while (C3D_FrameCounter(0) == start_count[0] || C3D_FrameCounter(1) == start_count[1]) {
         if (cps3_chr_jobs > 0) {
-            cps3_chr_dma_work(CHR_IDLE_PIECE);
+            if (!cps3_chr_dma_work_loaded(CHR_IDLE_PIECE)) {
+                /* its page is still being read (by the read-ahead thread): never wait for the SD card here */
+                svcSleepThread(500000);
+                ctr_prefetch_poll();
+            }
         } else {
             gspWaitForAnyEvent();
         }

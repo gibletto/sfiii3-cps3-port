@@ -1,9 +1,10 @@
 /*
  * ctr_prefetch.c  Reads the graphics ROM ahead of the game (3DS)
  *
- * A page missing from the cache takes about 7 ms to read from the SD card. The game mostly reads the ROM in
- * order, so after each miss a low-priority thread reads the next few pages into spare buffers, and they are
- * moved into the cache between frames.
+ * A page missing from the cache takes about 4.5 ms to read from the SD card (16 KB, straight through FS). The
+ * game mostly reads the ROM in order, so after each miss a thread reads the next few pages into spare buffers,
+ * and they are moved into the cache between frames. It also reads the pages that queued graphics loads will need
+ * (cps3_chr_dma_upcoming). The thread runs on the system core when it can, so its reads overlap the game.
  */
 
 #include <stdio.h>
@@ -17,7 +18,7 @@
 #include "ctr_prefetch.h"
 
 #define PAGE_BYTES  (4u << CPS3_USER5_PAGE_SHIFT)
-#define BUFS        12
+#define BUFS        24
 #define AHEAD       8
 
 enum { B_FREE, B_QUEUED, B_READING, B_DONE };
@@ -25,7 +26,7 @@ enum { B_FREE, B_QUEUED, B_READING, B_DONE };
 typedef struct {
     u32 page;
     u32 age;                /* queue order: the oldest is reused first */
-    u32 urgent;             /* wanted by the sound: read first */
+    u32 urgent;             /* wanted by the sound or a graphics load: read first */
     volatile u32 state;
     u8* data;
 } Buf;
@@ -35,18 +36,34 @@ static LightLock lock;
 static LightEvent wake;
 static Thread thread;
 static volatile int quit;
-static FILE* file;
+static Handle fh_thread, fh_main;   /* the graphics ROM file, opened once for each thread */
 static u32 file_size;
 static u32 queue_clock;
 
-static void read_page(Buf* b) {
-    u32 ofs = b->page * PAGE_BYTES;
+/* reads a page straight through FS (stdio costs about 2.7 ms more per 16 KB read) */
+static int raw_read(Handle h, u32 page, void* dst) {
+    u32 ofs = page * PAGE_BYTES;
     u32 want = ofs + PAGE_BYTES <= file_size ? PAGE_BYTES : file_size - ofs;
-    memset(b->data, 0, PAGE_BYTES);
-    fseek(file, ofs, SEEK_SET);
-    if (fread(b->data, 1, want, file) != want) {
-        memset(b->data, 0, PAGE_BYTES);
+    u32 got = 0;
+    if (want < PAGE_BYTES) {
+        memset(dst, 0, PAGE_BYTES);
     }
+    if (R_FAILED(FSFILE_Read(h, &got, ofs, dst, want)) || got != want) {
+        memset(dst, 0, PAGE_BYTES);
+        return 0;
+    }
+    return 1;
+}
+
+/* a cache miss with nothing read ahead: the game thread reads it now */
+static int read_now(u32 page, void* dst) {
+    return page * PAGE_BYTES < file_size && raw_read(fh_main, page, dst);
+}
+
+static int open_raw(const char* path, Handle* h) {
+    return strncmp(path, "sdmc:", 5) == 0 &&
+           R_SUCCEEDED(FSUSER_OpenFileDirectly(h, ARCHIVE_SDMC, fsMakePath(PATH_EMPTY, ""),
+                                               fsMakePath(PATH_ASCII, path + 5), FS_OPEN_READ, 0));
 }
 
 static void reader_main(void* arg) {
@@ -70,7 +87,7 @@ static void reader_main(void* arg) {
             LightEvent_Wait(&wake);
             continue;
         }
-        read_page(next);
+        raw_read(fh_thread, next->page, next->data);
         LightLock_Lock(&lock);
         next->state = B_DONE;
         LightLock_Unlock(&lock);
@@ -151,7 +168,7 @@ static void ahead(u32 page) {
     }
 }
 
-/* a page the sound wants (it plays on without waiting): read it before the others */
+/* a page wanted soon by something that does not wait for it (the sound, a queued graphics load): read it first */
 static void want(u32 page) {
     Buf* b;
     u32 i;
@@ -188,7 +205,42 @@ static void want(u32 page) {
     }
 }
 
-static const Cps3User5Reader reader = { take, ahead, want };
+static const Cps3User5Reader reader = { take, ahead, want, read_now };
+
+/* the pages queued graphics loads will read: into free buffers only, in the order they are needed */
+static void hint_chr_loads(void) {
+    u32 pages[24], n, k, i;
+    int queued = 0;
+    n = cps3_chr_dma_upcoming(pages, 24);
+    if (n == 0) {
+        return;
+    }
+    LightLock_Lock(&lock);
+    for (k = 0; k < n; k++) {
+        u32 p = pages[k];
+        Buf* b = NULL;
+        if (p >= CPS3_USER5_PAGES || p * PAGE_BYTES >= file_size || cps3_user5_cached(p) || find(p) != NULL) {
+            continue;
+        }
+        for (i = 0; i < BUFS && b == NULL; i++) {
+            if (bufs[i].state == B_FREE) {
+                b = &bufs[i];
+            }
+        }
+        if (b == NULL) {
+            break;
+        }
+        b->page = p;
+        b->age = ++queue_clock;
+        b->urgent = 0;
+        b->state = B_QUEUED;
+        queued = 1;
+    }
+    LightLock_Unlock(&lock);
+    if (queued) {
+        LightEvent_Signal(&wake);
+    }
+}
 
 void ctr_prefetch_poll(void) {
     u32 i;
@@ -204,6 +256,7 @@ void ctr_prefetch_poll(void) {
             LightLock_Unlock(&lock);
         }
     }
+    hint_chr_loads();
 }
 
 int ctr_prefetch_start(void) {
@@ -213,8 +266,11 @@ int ctr_prefetch_start(void) {
     if (path == NULL) {
         return 0;                       /* the whole ROM is in memory */
     }
-    file = fopen(path, "rb");
-    if (file == NULL) {
+    if (!open_raw(path, &fh_thread)) {
+        return 0;
+    }
+    if (!open_raw(path, &fh_main)) {
+        FSFILE_Close(fh_thread);
         return 0;
     }
     file_size = cps3_user5_file_size();
@@ -228,7 +284,15 @@ int ctr_prefetch_start(void) {
     LightLock_Init(&lock);
     LightEvent_Init(&wake, RESET_ONESHOT);
     svcGetThreadPriority(&prio, CUR_THREAD_HANDLE);
-    thread = threadCreate(reader_main, NULL, 16 * 1024, prio + 1, -2, false);
+    /* The system core (core 1): the app may use up to the time limit there. The reads mostly wait on the SD card,
+       so they need little of it. Otherwise the game's core, above the game: it takes the CPU only to start a
+       read, instead of waiting until the game is idle. */
+    if (R_SUCCEEDED(APT_SetAppCpuTimeLimit(30))) {
+        thread = threadCreate(reader_main, NULL, 16 * 1024, prio - 1, 1, false);
+    }
+    if (thread == NULL) {
+        thread = threadCreate(reader_main, NULL, 16 * 1024, prio - 1, -2, false);
+    }
     if (thread == NULL) {
         return 0;
     }
@@ -244,5 +308,7 @@ void ctr_prefetch_stop(void) {
         threadJoin(thread, U64_MAX);
         threadFree(thread);
         thread = NULL;
+        FSFILE_Close(fh_thread);
+        FSFILE_Close(fh_main);
     }
 }
