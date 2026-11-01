@@ -8,8 +8,9 @@
  * Top screen: the game, drawn by the GPU (ctr_video.c). Bottom screen: the chosen fighter's move list
  * (ctr_bottom.c). Sound: the DSP (ctr_sound.c).
  *
- * Controls: D-pad or Circle Pad to move, Y X L punches, B A R kicks, START. SELECT inserts a coin; held with
- * START it is the test switch (settings, free play), with L the service coin, with B it quits.
+ * Controls: D-pad or Circle Pad to move; the other buttons are mapped in sdmc:/sf3/controls.ini (ctr_controls.c).
+ * SELECT inserts a coin; held with START it is the test switch (settings, free play), with L the service coin,
+ * with R the button setup screen, with B it quits.
  */
 
 #include <stdio.h>
@@ -25,6 +26,7 @@
 #include "ctr_prefetch.h"
 #include "ctr_sound.h"
 #include "ctr_bottom.h"
+#include "ctr_controls.h"
 
 #define ROM_DIR         "sdmc:/sf3/rom-data"
 #define USER5_PAGES     4096        /* graphics ROM cache in 16 KB pages: as many as memory allows */
@@ -33,25 +35,30 @@
 static PrintConsole con;
 static u32 coin_frames;             /* a coin holds the switch for a few frames */
 static int select_combo;            /* SELECT was used with another button: no coin on release */
+static int pictures;                /* the bottom screen shows the move lists */
 
-/* reads the buttons into the board's switches; 0 to quit */
+enum { QUIT, PLAY, SETUP };
+
+/* reads the buttons into the board's switches */
 static int read_inputs(void) {
     static const struct {
         u32 key;
         u32 in;
-    } map[] = {
+    } dirs[] = {
         { KEY_UP, CPS3_IN_UP }, { KEY_DOWN, CPS3_IN_DOWN }, { KEY_LEFT, CPS3_IN_LEFT }, { KEY_RIGHT, CPS3_IN_RIGHT },
-        { KEY_Y, CPS3_IN_LP },  { KEY_X, CPS3_IN_MP },      { KEY_L, CPS3_IN_HP },       { KEY_B, CPS3_IN_LK },
-        { KEY_A, CPS3_IN_MK },  { KEY_R, CPS3_IN_HK },      { KEY_START, CPS3_IN_START },
     };
-    const u32 shifted = KEY_START | KEY_L | KEY_B;
+    const u32 shifted = KEY_START | KEY_L | KEY_R | KEY_B;
     u32 held = hidKeysHeld();
     u32 down = hidKeysDown();
     u32 p1 = 0, sys = 0;
     u32 i;
     if (held & KEY_SELECT) {
         if (down & KEY_B) {
-            return 0;
+            return QUIT;
+        }
+        if (down & KEY_R) {
+            select_combo = 0;
+            return SETUP;
         }
         if (held & KEY_START) {
             sys |= CPS3_SYS_TEST;
@@ -69,17 +76,18 @@ static int read_inputs(void) {
         }
         select_combo = 0;
     }
-    for (i = 0; i < sizeof(map) / sizeof(map[0]); i++) {
-        if (held & map[i].key) {
-            p1 |= map[i].in;
+    for (i = 0; i < sizeof(dirs) / sizeof(dirs[0]); i++) {
+        if (held & dirs[i].key) {
+            p1 |= dirs[i].in;
         }
     }
+    p1 |= ctr_controls_map(held);
     if (coin_frames != 0) {
         coin_frames--;
         p1 |= CPS3_IN_COIN;
     }
     cps3_set_inputs(p1, 0, sys);
-    return 1;
+    return PLAY;
 }
 
 /* the fighter to show on the bottom screen: the player's confirmed choice, or -1 */
@@ -113,9 +121,18 @@ static int fail(const char* message) {
     return 0;
 }
 
+/* the bottom screen's text, under the pictures if there are any */
+static void bottom_help(void) {
+    consoleClear();
+    if (!pictures) {
+        printf("\nSELECT coin, SELECT+START test menu\nSELECT+L service, SELECT+R buttons\nSELECT+B quit\n");
+    }
+}
+
 int main(int argc, char** argv) {
     char path[256];
     bool n3ds = false;
+    int setup = 0;
     (void)argc;
     (void)argv;
 
@@ -131,6 +148,7 @@ int main(int argc, char** argv) {
     if (cps3_load_rom(ROM_DIR) != 0) {
         return fail("The ROM files were not found in\n" ROM_DIR "\n\nSee the README.");
     }
+    ctr_controls_load();
     if (!ctr_video_init()) {
         return fail("The GPU renderer could not start.");
     }
@@ -143,17 +161,29 @@ int main(int argc, char** argv) {
     }
     snprintf(path, sizeof(path), "%s/eeprom.bin", ROM_DIR);
     cps3_eeprom_load(path);
-    if (ctr_bottom_init(con.frameBuffer)) {
-        consoleClear();
-    } else {
-        printf("\nSELECT coin, SELECT+START test menu\nSELECT+L service, SELECT+B quit\n");
-    }
+    pictures = ctr_bottom_init(con.frameBuffer);
+    bottom_help();
 
     cps3_boot();
     while (aptMainLoop()) {
         hidScanInput();
-        if (!read_inputs()) {
-            break;
+        if (setup) {
+            /* the game waits while the bottom screen asks for the buttons */
+            if (!ctr_controls_setup_frame()) {
+                setup = 0;
+                bottom_help();
+                ctr_bottom_redraw();
+            }
+            gspWaitForVBlank();
+            continue;
+        }
+        switch (read_inputs()) {
+        case QUIT:
+            goto quit;
+        case SETUP:
+            setup = 1;
+            ctr_controls_setup_begin();
+            continue;
         }
         ctr_prefetch_poll();
         cps3_run_frame();
@@ -161,6 +191,7 @@ int main(int argc, char** argv) {
         ctr_video_render();
         ctr_bottom_frame(player_fighter());
     }
+quit:
     ctr_bottom_exit();
     ctr_sound_exit();
     ctr_prefetch_stop();

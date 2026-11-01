@@ -56,11 +56,17 @@ for how to set up the SD card.
 | D-pad / Circle Pad | move |
 | Y X L | light, medium, heavy punch |
 | B A R | light, medium, heavy kick |
+| ZL / ZR (New 3DS) | all three punches / all three kicks |
 | START | start |
 | SELECT | insert a coin |
 | SELECT + START | operator (test) menu: settings, free play, difficulty and so on |
 | SELECT + L | service coin (a free credit) |
+| SELECT + R | button setup |
 | SELECT + B | quit |
+
+The attack buttons can be changed. SELECT + R opens a setup screen on the bottom screen that asks for a button
+for each attack, or edit `sdmc:/sf3/controls.ini`, which is made the first time the game runs. In the file a
+button can press several at once, for example `R = HP HK`.
 
 In the operator menu, choose CONFIGURATION to change the game settings and coin settings, including free play.
 Settings are saved like on the arcade board.

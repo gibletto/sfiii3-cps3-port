@@ -111,6 +111,10 @@ void ctr_bottom_frame(int fighter) {
     }
 }
 
+void ctr_bottom_redraw(void) {
+    shown = -3;
+}
+
 void ctr_bottom_exit(void) {
     if (thread != NULL) {
         quit = 1;

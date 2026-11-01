@@ -22,11 +22,18 @@ slow to do.
 | D-pad / Circle Pad | move |
 | Y X L | light, medium, heavy punch |
 | B A R | light, medium, heavy kick |
+| ZL / ZR (New 3DS) | all three punches / all three kicks |
 | START | start |
 | SELECT | insert a coin |
 | SELECT + START | operator (test) menu |
 | SELECT + L | service coin (a free credit) |
+| SELECT + R | button setup |
 | SELECT + B | quit |
+
+**Changing the buttons.** Hold SELECT and press R. The game pauses, and the bottom screen asks you to press a
+button for each attack in turn, like the button check on an arcade cabinet. The buttons are saved to
+`sdmc:/sf3/controls.ini`. You can also edit that file on a PC; there a button can press several at once, for
+example `R = HP HK`.
 
 Hold SELECT and press START to open the arcade's operator menu. Go to CONFIGURATION to change the settings:
 difficulty, round time, coins per credit, and **free play**. The settings are saved to the SD card like on the

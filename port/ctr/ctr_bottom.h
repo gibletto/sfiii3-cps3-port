@@ -11,6 +11,7 @@
 
 int ctr_bottom_init(u16* framebuffer);  /* the bottom screen's RGB565 framebuffer; 0 if no pictures */
 void ctr_bottom_frame(int fighter);     /* each frame: the fighter to show, or -1 for the logo */
+void ctr_bottom_redraw(void);        /* after something else has drawn on the screen */
 void ctr_bottom_exit(void);
 
 #endif

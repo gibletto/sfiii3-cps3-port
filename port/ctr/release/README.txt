@@ -38,11 +38,18 @@ Start "SF III 3rd Strike" from the Homebrew Launcher. It takes a few seconds to 
     D-pad / Circle Pad   move
     Y  X  L              light / medium / heavy punch
     B  A  R              light / medium / heavy kick
+    ZL / ZR              all three punches / all three kicks (New 3DS)
     START                start
     SELECT               insert a coin
     SELECT + START       operator (test) menu: settings, free play
     SELECT + L           service coin (a free credit)
+    SELECT + R           button setup
     SELECT + B           quit
+
+Changing the buttons: hold SELECT and press R. The game pauses and the bottom screen asks you to press the
+button for each attack in turn (SELECT for none, START to cancel). The buttons are saved in
+sdmc:/sf3/controls.ini, which you can also edit on a PC: each line is a button and what it does, and a button
+can do several things at once, for example "R = HP HK".
 
 Hold SELECT and press START for the arcade's operator menu. CONFIGURATION has the game and coin settings,
 including free play. Settings and high scores are saved in sdmc:/sf3/rom-data/eeprom.bin.
