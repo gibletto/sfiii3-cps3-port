@@ -158,7 +158,7 @@ jobs:
         env:
           TAG: ${{ github.event.release.tag_name || inputs.tag }}
         run: |
-          version="${TAG:-$(git rev-parse --short=7 HEAD)}"
+          version="${TAG:-${GITHUB_SHA::7}}"
           name="sfiii3-windows-$version"
           dir="dist/$name"
           mkdir -p "$dir/roms" "$dir/tools"
