@@ -169,6 +169,7 @@ u32 cps3_user5_file_size(void) {
 static s32 open_user5_stream(const char* dir) {
     char path[512];
     u32 i;
+    void* hold;
     snprintf(path, sizeof(path), "%s/%s", dir, "user5.bin");
     snprintf(user5_path, sizeof(user5_path), "%s", path);
     user5_file = fopen(path, "rb");
@@ -184,21 +185,25 @@ static s32 open_user5_stream(const char* dir) {
         fprintf(stderr, "out of memory for the graphics ROM cache\n");
         return -1;
     }
-    /* Allocate slots until memory runs short, then free enough for the reserve (task stacks etc.). */
+    /* Fill the cache with as many pages as fit, keeping the reserve free (task stacks, sound and so on).
+       The reserve is held while the pages are allocated, so it is kept even when every page fits. */
+    hold = user5_reserve != 0 ? malloc(user5_reserve) : NULL;
     for (i = 0; i < user5_slots; i++) {
         user5_slot_page[i] = ~0u;
         if ((user5_slot_mem[i] = malloc(PAGE_BYTES)) == NULL) {
             break;
         }
     }
-    if (i < user5_slots) {
+    if (hold == NULL && user5_reserve != 0) {
+        /* not even the reserve fitted: give pages back for it */
         u32 give = (user5_reserve + PAGE_BYTES - 1) / PAGE_BYTES;
         u32 n = i > give ? i - give : 0;
         while (i > n) {
             free(user5_slot_mem[--i]);
         }
-        user5_slots = i;
     }
+    user5_slots = i;
+    free(hold);
     if (user5_slots < 2) {
         fprintf(stderr, "out of memory for the graphics ROM cache\n");
         return -1;
