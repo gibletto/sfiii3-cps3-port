@@ -341,9 +341,8 @@ static CharGfxSet* convert_set(const u8* rom, u32 rom_size, u32 addr) {
     return set;
 }
 
-static s32 load_cg(const char* dir) {
-    u32 size;
-    u8* rom = read_file(dir, "cg.bin", &size);
+/* builds the pattern directory from cg.bin's contents; frees rom */
+static s32 load_cg(u8* rom, u32 size) {
     CharGfxSet** done;
     s32 i;
     if (rom == NULL) {
@@ -453,7 +452,8 @@ s32 cps3_load_rom(const char* dir) {
     memcpy(cps3_bios, data, size < CPS3_BIOS_SIZE ? size : CPS3_BIOS_SIZE);
     free(data);
     /* Load the directory first. It briefly needs a lot of memory that the ROM cache would take. */
-    if (load_cg(dir) != 0) {
+    data = read_file(dir, "cg.bin", &size);
+    if (load_cg(data, size) != 0) {
         return -1;
     }
 
@@ -474,6 +474,20 @@ s32 cps3_load_rom(const char* dir) {
         for (i = 0; i < CPS3_USER5_PAGES; i++) {
             cps3_user5_page[i] = all + (i << CPS3_USER5_PAGE_SHIFT);
         }
+    }
+    return 0;
+}
+
+s32 cps3_load_rom_data(const u8* bios, u8* cg, u32 cg_size, u32* user5) {
+    u32 i;
+    cps3_hw_init();
+    memcpy(cps3_bios, bios, CPS3_BIOS_SIZE);
+    if (load_cg(cg, cg_size) != 0) {
+        free(user5);
+        return -1;
+    }
+    for (i = 0; i < CPS3_USER5_PAGES; i++) {
+        cps3_user5_page[i] = user5 + (i << CPS3_USER5_PAGE_SHIFT);
     }
     return 0;
 }

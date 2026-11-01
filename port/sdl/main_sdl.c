@@ -1,9 +1,14 @@
 /*
  * main_sdl.c  The PC front end (SDL2)
  *
- *     sf3 [rom-data dir]       (default: rom-data, made by port/tools/prepare_rom.py)
+ *     sf3 [sfiii3nr1.zip | folder]
  *
- * Runs the board at its 59.59 Hz frame rate with the software renderer. F12 saves frame.bmp; Escape quits.
+ * The ROM set is MAME's sfiii3nr1.zip, read as it is (cps3_romset.c). With no argument it is looked for in the
+ * roms folder next to sf3.exe, then in rom-data folders (the files port/tools/prepare_rom.py makes, which the
+ * 3DS uses). The settings EEPROM is saved next to the ROM set.
+ *
+ * Runs the board at its 59.59 Hz frame rate with the software renderer. Alt+Enter or F11 toggles full screen,
+ * F12 saves frame.bmp, Escape quits.
  *
  * Controls (MAME's defaults where it has one): arrows, A S D punches, Z X C kicks, 1 start, 5 coin; 2 and 6 for
  * player 2's start and coin; F2 the test switch (settings, free play), 9 the service coin. Game controllers:
@@ -22,6 +27,7 @@
 #include "cps3_kernel.h"
 #include "cps3_video.h"
 #include "cps3_sound.h"
+#include "cps3_romset.h"
 
 #define SCALE 3
 #define FRAME_HZ (42954545.0 / 6.0 / 455.0 / 264.0)
@@ -198,9 +204,91 @@ static void sound_frame(void) {
     }
 }
 
+#define TITLE "Street Fighter III 3rd Strike"
+
+static int is_file(const char* path) {
+    FILE* f = fopen(path, "rb");
+    if (f != NULL) {
+        fclose(f);
+    }
+    return f != NULL;
+}
+
+static int ends_with(const char* s, const char* end) {
+    size_t n = strlen(s), m = strlen(end);
+    return n >= m && SDL_strcasecmp(s + n - m, end) == 0;
+}
+
+/* loads the ROM set from the argument or the usual places; save_dir gets the folder for the EEPROM */
+static int load_game(const char* arg, char* save_dir, size_t len) {
+    char* base = SDL_GetBasePath();     /* sf3.exe's folder, with a trailing slash */
+    char zip[512], dir[512], msg[1200];
+    int found = 0;
+    zip[0] = dir[0] = '\0';
+    if (arg != NULL && ends_with(arg, ".zip")) {
+        snprintf(zip, sizeof(zip), "%s", arg);
+    } else if (arg != NULL) {
+        snprintf(zip, sizeof(zip), "%s/sfiii3nr1.zip", arg);
+        if (!is_file(zip)) {
+            zip[0] = '\0';
+            snprintf(dir, sizeof(dir), "%s", arg);
+        }
+    } else {
+        const char* tries[3][2] = { { base, "roms" }, { base, "rom-data" }, { "", "rom-data" } };
+        int i;
+        for (i = 0; i < 3 && !found; i++) {
+            snprintf(zip, sizeof(zip), "%s%s/sfiii3nr1.zip", tries[i][0] ? tries[i][0] : "", tries[i][1]);
+            snprintf(dir, sizeof(dir), "%s%s", tries[i][0] ? tries[i][0] : "", tries[i][1]);
+            if (is_file(zip)) {
+                dir[0] = '\0';
+                found = 1;
+            } else {
+                char bios[600];
+                zip[0] = '\0';
+                snprintf(bios, sizeof(bios), "%s/bios.bin", dir);
+                found = is_file(bios);
+            }
+        }
+        if (!found) {
+            snprintf(msg, sizeof(msg), "The ROM set was not found.\n\nPut sfiii3nr1.zip (MAME, non-merged) in\n%sroms",
+                     base ? base : "");
+            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, TITLE, msg, NULL);
+            SDL_free(base);
+            return 0;
+        }
+    }
+    SDL_free(base);
+    if (zip[0] != '\0') {
+        const char* slash = strrchr(zip, '/');
+        if (strrchr(zip, '\\') > slash) {
+            slash = strrchr(zip, '\\');
+        }
+        snprintf(save_dir, len, "%.*s", slash != NULL ? (int)(slash - zip) : 1, slash != NULL ? zip : ".");
+        if (cps3_load_romset(zip) != 0) {
+            snprintf(msg, sizeof(msg), "Could not load the ROM set:\n%s\n\n%s", zip, cps3_romset_error);
+            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, TITLE, msg, NULL);
+            return 0;
+        }
+    } else {
+        snprintf(save_dir, len, "%s", dir);
+        if (cps3_load_rom(dir) != 0) {
+            snprintf(msg, sizeof(msg), "Could not load the ROM files (bios.bin, cg.bin, user5.bin) from\n%s", dir);
+            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, TITLE, msg, NULL);
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static void toggle_fullscreen(SDL_Window* win) {
+    int full = (SDL_GetWindowFlags(win) & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
+    SDL_SetWindowFullscreen(win, full ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);
+    SDL_ShowCursor(full ? SDL_ENABLE : SDL_DISABLE);
+}
+
 int main(int argc, char** argv) {
-    const char* dir = argc > 1 ? argv[1] : "rom-data";
-    char path[512];
+    char dir[512];
+    char path[600];
     SDL_Window* win;
     SDL_Renderer* ren;
     SDL_Texture* tex;
@@ -209,7 +297,7 @@ int main(int argc, char** argv) {
     s32 running = 1;
 
     host_divzero_install();
-    if (cps3_load_rom(dir) != 0) {
+    if (!load_game(argc > 1 ? argv[1] : NULL, dir, sizeof(dir))) {
         return 1;
     }
     snprintf(path, sizeof(path), "%s/eeprom.bin", dir);
@@ -219,7 +307,7 @@ int main(int argc, char** argv) {
         fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
         return 1;
     }
-    win = SDL_CreateWindow("Street Fighter III 3rd Strike", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+    win = SDL_CreateWindow(TITLE, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                            384 * SCALE, 224 * SCALE, SDL_WINDOW_RESIZABLE);
     ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED);
     tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, CPS3_VIDEO_MAX_W,
@@ -239,6 +327,10 @@ int main(int argc, char** argv) {
                 running = 0;
             } else if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_F12) {
                 save_bmp("frame.bmp", w, h);
+            } else if (e.type == SDL_KEYDOWN && !e.key.repeat &&
+                       (e.key.keysym.sym == SDLK_F11 ||
+                        (e.key.keysym.sym == SDLK_RETURN && (e.key.keysym.mod & KMOD_ALT) != 0))) {
+                toggle_fullscreen(win);
             } else if (e.type == SDL_CONTROLLERDEVICEADDED || e.type == SDL_CONTROLLERDEVICEREMOVED) {
                 open_pads();
             }

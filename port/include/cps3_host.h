@@ -67,6 +67,9 @@ u32 cps3_user5_file_size(void);
 extern u8 cps3_bios[CPS3_BIOS_SIZE];
 void cps3_hw_init(void);
 s32 cps3_load_rom(const char* dir);     /* calls cps3_hw_init */
+/* The same from memory (the PC loads the ROM set's zip): the BIOS (CPS3_BIOS_SIZE), cg.bin's contents and the
+   graphics ROM (CPS3_USER5_SIZE). Takes cg and user5, which must come from malloc. No streaming. */
+s32 cps3_load_rom_data(const u8* bios, u8* cg, u32 cg_size, u32* user5);
 
 /* Input bits, matching the game's LEVER_* and BUTTON_* bits (work.h). */
 #define CPS3_IN_UP      0x0001

@@ -1,7 +1,7 @@
-name: 3DS release
+name: Release
 
-# Builds the 3DS version (.3dsx and .cia) and attaches the zip to the release. Run it by hand to build without a
-# release, or with a tag to (re)attach the zip to that release.
+# Builds the 3DS version (.3dsx and .cia) and the Windows version, and attaches their zips to the release. Run it by
+# hand to build without a release, or with a tag to (re)attach the zips to that release.
 on:
   release:
     types: [published]
@@ -16,7 +16,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-3ds-${{ github.event.release.tag_name || inputs.tag || github.ref }}
+  group: release-${{ github.event.release.tag_name || inputs.tag || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -122,8 +122,67 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  # Windows: 32-bit (the game stores addresses in 32 bits), built with MSYS2's mingw32 toolchain
+  pc:
+    runs-on: windows-2025
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
+        with:
+          msystem: MINGW32
+          update: false
+          install: >-
+            mingw-w64-i686-gcc
+            mingw-w64-i686-cmake
+            mingw-w64-i686-ninja
+            mingw-w64-i686-SDL2
+            mingw-w64-i686-zlib
+            mingw-w64-i686-python
+            zip
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.release.tag_name || inputs.tag || github.ref }}
+
+      - name: Build
+        run: |
+          cmake -G Ninja -B build -DCMAKE_C_COMPILER=gcc
+          ninja -C build sf3
+
+      - name: Package
+        id: package
+        env:
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          version="${TAG:-$(git rev-parse --short=7 HEAD)}"
+          name="sfiii3-windows-$version"
+          dir="dist/$name"
+          mkdir -p "$dir/roms" "$dir/tools"
+          cp build/sf3.exe /mingw32/bin/SDL2.dll "$dir/"
+          touch "$dir/roms/PUT sfiii3nr1.zip HERE.txt"
+          cp port/sdl/release/README.txt "$dir/"
+          cp port/tools/prepare_rom.py games/sf3/tools/cps3rom.py "$dir/tools/"
+          cp LICENSE "$dir/LICENSE.txt"
+          cp NOTICE.md "$dir/NOTICE.md"
+          (cd dist && zip -r -9 "$name.zip" "$name")
+          (cd dist && sha256sum "$name.zip" > "$name.zip.sha256")
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.package.outputs.name }}
+          path: |
+            dist/${{ steps.package.outputs.name }}.zip
+            dist/${{ steps.package.outputs.name }}.zip.sha256
+          if-no-files-found: error
+          retention-days: 30
+
   publish:
-    needs: package
+    needs: [package, pc]
     if: github.event_name == 'release' || inputs.tag != ''
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -132,7 +191,8 @@ jobs:
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: ${{ needs.package.outputs.name }}
+          pattern: sfiii3-*
+          merge-multiple: true
           path: assets
 
       - name: Attach to the release

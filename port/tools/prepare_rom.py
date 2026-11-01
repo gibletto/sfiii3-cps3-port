@@ -15,7 +15,10 @@ import cps3rom  # noqa: E402
 
 
 def bios(z):
-    name = next(n for n in z.namelist() if n.endswith(".29f400.u2"))
+    names = z.namelist()    # the set has two BIOS chips; the port uses the European one
+    name = "sfiii3_euro.29f400.u2"
+    if name not in names:
+        name = next(n for n in names if n.endswith(".29f400.u2"))
     data = z.read(name)
     out = bytearray(len(data))
     for i in range(0, len(data), 4):

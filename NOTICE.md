@@ -3,7 +3,13 @@
 ## No game data
 
 This repository holds source code only. The game's graphics, sound and program data come from a ROM set the
-user owns, converted on the user's machine by `port/tools/prepare_rom.py`.
+user owns: the PC version reads it at start-up (`port/cps3/cps3_romset.c`), and for the 3DS it is converted on
+the user's machine by `port/tools/prepare_rom.py`.
+
+## Libraries in the releases
+
+The Windows release includes `SDL2.dll` ([SDL](https://libsdl.org), zlib license) and links
+[zlib](https://zlib.net) (zlib license). The 3DS release links libctru, citro3d (zlib license) and zlib.
 
 ## games/sf3
 

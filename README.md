@@ -10,23 +10,31 @@ arcade board did (memory, the task scheduler, the video and sound chips) and a f
 **No game data is included.** You need your own copy of the arcade ROM set (`sfiii3nr1.zip`, MAME non-merged).
 
 - [The 3DS version](3DS.md): what it does and how it runs on an original 3DS.
-- [Releases](https://github.com/gibletto/sfiii3-cps3-port/releases): ready-to-use 3DS builds.
+- [Releases](https://github.com/gibletto/sfiii3-cps3-port/releases): ready-to-use Windows and 3DS builds.
 
-## Preparing the ROM files
+## The ROM set
+
+The PC version reads `sfiii3nr1.zip` as it is: put it in `roms` next to `sf3.exe`.
+
+The 3DS version needs it converted first, because it streams the graphics from the SD card:
 
     python port/tools/prepare_rom.py <sfiii3nr1.zip> rom-data
 
-This writes `bios.bin`, `cg.bin` and `user5.bin` into `rom-data`. The game saves its settings there as
-`eeprom.bin`.
+This writes `bios.bin`, `cg.bin` and `user5.bin` into `rom-data`. The game saves its settings next to the ROM
+files as `eeprom.bin`.
 
 ## PC (Windows, SDL2)
 
 Build with MSYS2's **mingw32** environment (32-bit, because the game stores addresses in 32 bits). You need
-`mingw-w64-i686-gcc`, `mingw-w64-i686-cmake`, `mingw-w64-i686-ninja`, `mingw-w64-i686-SDL2` and Python 3.
+`mingw-w64-i686-gcc`, `mingw-w64-i686-cmake`, `mingw-w64-i686-ninja`, `mingw-w64-i686-SDL2`,
+`mingw-w64-i686-zlib` and Python 3.
 
     cmake -G Ninja -B build -DCMAKE_C_COMPILER=gcc
     ninja -C build
-    build/sf3 rom-data
+    build/sf3 <sfiii3nr1.zip>
+
+With no argument it looks for `roms/sfiii3nr1.zip` next to `sf3.exe`, then for a `rom-data` folder. A folder
+argument works too, holding either the zip or the converted files.
 
 | Keys | |
 |---|---|
@@ -36,7 +44,9 @@ Build with MSYS2's **mingw32** environment (32-bit, because the game stores addr
 | 1 / 5 | start / coin (2 / 6 for player 2) |
 | F2 | test menu (settings, free play) |
 | 9 | service coin |
+| Alt+Enter, F11 | full screen |
 | F12 | screenshot (frame.bmp) |
+| Escape | quit |
 
 Game controllers work too: D-pad or left stick, X Y RB punches, A B RT kicks, Start, and Back for a coin.
 
@@ -74,8 +84,8 @@ button can press several at once, for example `R = HP HK`.
 In the operator menu, choose CONFIGURATION to change the game settings and coin settings, including free play.
 Settings are saved like on the arcade board.
 
-Publishing a GitHub release runs `.github/workflows/release-3ds.yml`, which builds the 3DS version with the
-devkitPro Docker image and attaches the zip to the release.
+Publishing a GitHub release runs `.github/workflows/release.yml`. It builds the 3DS version with the devkitPro
+Docker image and the Windows version with MSYS2, and attaches both zips to the release.
 
 ## Layout
 

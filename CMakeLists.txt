@@ -80,12 +80,14 @@ if(NINTENDO_3DS)
     set(SYM_PREFIX "")
 else()
     find_package(SDL2 REQUIRED)
-    add_executable(sf3
+    add_executable(sf3 WIN32
         ${CPS3_SOURCES}
+        ${PORT}/cps3/cps3_romset.c
         ${PORT}/sys/coro_win32.c
         ${PORT}/sys/divzero_win32.c
         ${PORT}/sdl/main_sdl.c)
-    target_link_libraries(sf3 PRIVATE sf3_game SDL2::SDL2main SDL2::SDL2)
+    # zlib linked in, so the game needs only SDL2.dll
+    target_link_libraries(sf3 PRIVATE sf3_game SDL2::SDL2main SDL2::SDL2 -l:libz.a)
     set(SYM_PREFIX "_")     # i686 C symbols have a leading underscore
 endif()
 target_include_directories(sf3 PRIVATE ${PORT}/sys)
