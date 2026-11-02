@@ -35,7 +35,26 @@ add_custom_command(OUTPUT ${HOST_DATA}
     COMMENT "Laying out the game data for the host")
 
 file(GLOB GAME_SOURCES ${GAME}/src/*.c)
-add_library(sf3_game STATIC ${GAME_SOURCES} ${HOST_DATA})
+# The board links the game's objects in the order of its .sub file, which gives tables and RAM variables in
+# different files the neighbours they have there: the game reads past the end of some tables. Link them in that
+# order too, as an object library (a static library's members come in whatever order the linker takes them).
+file(STRINGS ${GAME}/sf3.sub GAME_SUB REGEX "^INPUT obj")
+set(GAME_LINKED)
+foreach(line ${GAME_SUB})
+    string(REGEX REPLACE "^INPUT obj.(.+)\\.obj.*$" "\\1" obj "${line}")
+    foreach(f ${HOST_DATA_DIR}/${obj}.c ${GAME}/src/${obj}.c ${GAME}/src/nonmatching/${obj}.c)
+        if(f IN_LIST GAME_SOURCES OR f IN_LIST HOST_DATA)
+            list(APPEND GAME_LINKED ${f})
+        endif()
+    endforeach()
+endforeach()
+# then anything the .sub does not list
+foreach(f ${GAME_SOURCES} ${HOST_DATA})
+    if(NOT f IN_LIST GAME_LINKED)
+        list(APPEND GAME_LINKED ${f})
+    endif()
+endforeach()
+add_library(sf3_game OBJECT ${GAME_LINKED})
 target_include_directories(sf3_game PUBLIC ${GAME}/include ${PORT}/include)
 target_compile_definitions(sf3_game PUBLIC HOST_PORT=1 HOST_LITTLE_ENDIAN=1)
 # compile the game code the way the arcade compiler treated it: K&R, signed char, wrapping, type punning
@@ -43,7 +62,9 @@ target_compile_options(sf3_game PRIVATE
     -std=gnu17 -fpermissive -fwrapv -fno-strict-aliasing -fsigned-char -w
     -include ${PORT}/include/port_prefix.h
     # keep data in definition order (checked after linking by port/tools/check_layout.py)
-    -fno-toplevel-reorder)
+    -fno-toplevel-reorder
+    # variables set to 0 stay with the other initialised ones, as the board's compiler keeps them
+    -fno-zero-initialized-in-bss)
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86|i686|AMD64|i386")
     target_compile_options(sf3_game PRIVATE -malign-data=abi)
 endif()

@@ -8,8 +8,8 @@ offsets into the arrays that follow). GCC pads larger arrays, so each array defi
 alignment equal to its element's. The build compiles the copies; games/sf3 is left as it is.
 
 Some reads run past the end of a table into the next one, which on a little-endian host holds its 16- and 32-bit
-elements in the other byte order. Each copy also lists its runs of such tables (host_ranges_<file>, in .data, so
-the tables' own layout is untouched), and <out dir>/host_data_ranges.c lists the lists, for
+elements in the other byte order. Each copy also lists its runs of such tables (host_ranges_<file>, in a section
+of their own, so the game's own layout is untouched), and <out dir>/host_data_ranges.c lists the lists, for
 port/cps3/host_board.c to read such bytes in the board's order.
 """
 import pathlib, re, sys
@@ -28,6 +28,20 @@ def swap16(m):
 
 DEF = re.compile(r"^(?P<decl>(?:static\s+)?const\s+[^=;(]*?\b(?P<name>[A-Za-z_]\w*)\s*(?:\[[^\]]*\])+)\s*=")
 UNIT = {"s16": 2, "u16": 2, "s32": 4, "u32": 4}     # element types held in the host's byte order, and their size
+# The constants (the board's ROM data) go in a section of their own, in link order, so the constants of the code
+# files linked between them (jump tables, strings) don't come between them. CONST matches the ones DEF doesn't:
+# single values and tables of function pointers.
+SECTION = ' __attribute__((section("game_rom")))'
+CONST = re.compile(r"^(?P<decl>(?:static\s+)?(?:const\s+[A-Za-z_][\w\s]*?\b[A-Za-z_]\w*"
+                   r"|[A-Za-z_][\w\s]*\(\s*\*\s*const\s+[A-Za-z_]\w*\s*(?:\[[^\]]*\])+\s*\)\s*\([^)]*\)))\s*=")
+
+
+def rom(m):
+    """The section for a table whose elements are constant (an array of pointers to constants is not)."""
+    typ = m.group("decl")[:m.start("name") - m.start("decl")]
+    return SECTION if "*" not in typ or "const" in typ.rpartition("*")[2] else ""
+
+
 # a run of consecutive tables of one element size: aligned to it and a whole number of elements long, they are
 # contiguous, from first to the end of last
 RANGE_TYPE = "struct host_range { const void* first; const void* last; unsigned last_size, unit; };"
@@ -46,11 +60,16 @@ def transform(text, src):
 
     for line in text.splitlines():
         m = DEF.match(line)
-        if m and not line.startswith("static"):
+        c = None if m else CONST.match(line)
+        if c:
+            line = c.group("decl") + SECTION + line[c.end("decl"):]
+        elif m and line.startswith("static"):
+            line = m.group("decl") + rom(m) + line[m.end("decl"):]
+        elif m:
             decl, name = m.group("decl"), m.group("name")
             base = [w for w in line[:m.start("name")].split() if w != "const"]
             rest = line[m.end("decl"):]
-            line = f"extern {decl}; {decl} __attribute__((aligned(__alignof__({name}[0]))))" + rest
+            line = f"extern {decl}; {decl} __attribute__((aligned(__alignof__({name}[0]))))" + rom(m) + rest
             if name in BYTE_IMAGES:
                 image = name
                 close()
@@ -73,7 +92,7 @@ def transform(text, src):
         out.append(line)
     close()
     if ranges:
-        out += ["", RANGE_TYPE, f"struct host_range host_ranges_{stem(src)}[] = {{"] + ranges + ["    { 0, 0, 0, 0 },", "};"]
+        out += ["", RANGE_TYPE, f"struct host_range host_ranges_{stem(src)}[] __attribute__((section(\"host_ranges\"))) = {{"] + ranges + ["    { 0, 0, 0, 0 },", "};"]
     return "\n".join(out) + "\n", bool(ranges)
 
 
