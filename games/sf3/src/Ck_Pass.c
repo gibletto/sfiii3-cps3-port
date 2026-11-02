@@ -995,6 +995,9 @@ s32 Check_F_Cross_Chop(PLW* wk, WORK* em, s16 VS_Technique) {
 
 /* Opponent-specific passive check (table AS): returns the chosen response, 0 when none. */
 s32 Check_PL_Unit_AS(PLW* wk) {
+#ifdef HOST_PORT
+    return    /* the board jumps to the routine: its result is returned */
+#endif
     Passive_AS_tbl[((PLW*)wk->wu.target_adrs)->player_number](wk);
 }
 
@@ -1258,6 +1261,9 @@ s32 VS_REMY_AS(PLW* wk) {
 
 /* Opponent-specific passive check (table A): returns the chosen response, 0 when none. */
 s32 Check_PL_Unit_A(PLW* wk) {
+#ifdef HOST_PORT
+    return    /* the board jumps to the routine: its result is returned */
+#endif
     Passive_A_tbl[((PLW*)wk->wu.target_adrs)->player_number](wk);
 }
 
@@ -1554,6 +1560,9 @@ s32 VS_REMY_A(PLW* wk) {
 
 /* Opponent-specific passive check (table BS): returns the chosen response, 0 when none. */
 s32 Check_PL_Unit_BS(PLW* wk) {
+#ifdef HOST_PORT
+    return    /* the board jumps to the routine: its result is returned */
+#endif
     Passive_BS_tbl[((PLW*)wk->wu.target_adrs)->player_number](wk);
 }
 
@@ -1843,6 +1852,9 @@ s32 VS_REMY_BS(PLW* wk) {
 
 /* Opponent-specific passive check (table B): returns the chosen response, 0 when none. */
 s32 Check_PL_Unit_B(PLW* wk) {
+#ifdef HOST_PORT
+    return    /* the board jumps to the routine: its result is returned */
+#endif
     Passive_B_tbl[((PLW*)wk->wu.target_adrs)->player_number](wk);
 }
 
@@ -2173,6 +2185,9 @@ s32 VS_REMY_B(PLW* wk) {
 
 /* Opponent-specific passive check (table CS): returns the chosen response, 0 when none. */
 s32 Check_PL_Unit_CS(PLW* wk) {
+#ifdef HOST_PORT
+    return    /* the board jumps to the routine: its result is returned */
+#endif
     Passive_CS_tbl[((PLW*)wk->wu.target_adrs)->player_number](wk);
 }
 
@@ -2446,6 +2461,9 @@ s32 VS_REMY_CS(PLW* wk) {
 
 /* Opponent-specific passive check (table C): returns the chosen response, 0 when none. */
 s32 Check_PL_Unit_C(PLW* wk) {
+#ifdef HOST_PORT
+    return    /* the board jumps to the routine: its result is returned */
+#endif
     Passive_C_tbl[((PLW*)wk->wu.target_adrs)->player_number](wk);
 }
 
@@ -2758,6 +2776,9 @@ s32 VS_REMY_C(PLW* wk) {
 
 /* Opponent-specific passive check (table DS): returns the chosen response, 0 when none. */
 s32 Check_PL_Unit_DS(PLW* wk) {
+#ifdef HOST_PORT
+    return    /* the board jumps to the routine: its result is returned */
+#endif
     Passive_DS_tbl[((PLW*)wk->wu.target_adrs)->player_number](wk);
 }
 
@@ -2890,6 +2911,9 @@ s32 VS_REMY_DS(PLW* wk) {
 
 /* Opponent-specific passive check (table D): returns the chosen response, 0 when none. */
 s32 Check_PL_Unit_D(PLW* wk) {
+#ifdef HOST_PORT
+    return    /* the board jumps to the routine: its result is returned */
+#endif
     Passive_D_tbl[((PLW*)wk->wu.target_adrs)->player_number](wk);
 }
 

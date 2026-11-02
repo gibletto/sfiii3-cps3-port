@@ -343,6 +343,9 @@ s16 Play_Style;
             break;
         }
     }
+#ifdef HOST_PORT
+    return ewk->wu.direction;    /* the board returns R0: the switch value */
+#endif
 }
 
 

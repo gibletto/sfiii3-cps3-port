@@ -1829,7 +1829,11 @@ u16 Sw_1;
 s16 PL_id;
 {
     if ((E_No0 != E0_ENDING) && Request_Break[PL_id ^ 1]) {
+#ifdef HOST_PORT
+        return PL_id ^ 1;    /* the board returns R0: the other player's index */
+#else
         return;
+#endif
     }
     if (Request_Break[PL_id]) {
         if (Forbid_Break || Extra_Break) {
