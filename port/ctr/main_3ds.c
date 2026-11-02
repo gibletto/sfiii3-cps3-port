@@ -203,10 +203,15 @@ int main(int argc, char** argv) {
     gfxInitDefault();
     consoleInit(GFX_BOTTOM, &con);
     printf("Street Fighter III 3rd Strike\n");
+#ifdef OLD_3DS_TEST
+    printf("Old 3DS test build\n");
+    (void)n3ds;     /* no New 3DS speed-up: runs as on an Old 3DS */
+#else
     APT_CheckNew3DS(&n3ds);
     if (n3ds) {
         osSetSpeedupEnable(true);
     }
+#endif
 
     if (!rom_files_present() && !unpack_rom_set()) {
         return 0;

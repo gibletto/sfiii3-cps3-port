@@ -1,5 +1,6 @@
 /build/
 /build-3ds/
+/build-3ds-o3ds/
 /rom-data/
 __pycache__/
 *.bmp
