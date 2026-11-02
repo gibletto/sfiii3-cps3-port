@@ -16,6 +16,11 @@
 #include "structs.h"
 #include "work.h"
 #include "romdata.h"
+#ifdef HOST_PORT
+#include "host_board.h"    /* atsagct is read past its end, into exdm_ix_data */
+#else
+#define BOARD_READ(tbl, i) ((tbl)[i])
+#endif
 #include "extern.h"
 #include "CALDIR.h"
 #include "PLS02.h"
@@ -404,7 +409,7 @@ void dead_voice_request2(PLW* wk) {
     }
     secd1 = dead_voice_table[wk->player_number][0];
     secd2 = dead_voice_table[wk->player_number][1];
-    if (wk->wu.routine_no[1] == PLAYER_DAMAGE && (atsagct[wk->wu.routine_no[2]] & 0x10)) {
+    if (wk->wu.routine_no[1] == PLAYER_DAMAGE && (BOARD_READ(atsagct, wk->wu.routine_no[2]) & 0x10)) {
         sound_effect_request[secd2](wk, secd2 + ks);
     } else {
         sound_effect_request[secd1](wk, secd1 + ks);
