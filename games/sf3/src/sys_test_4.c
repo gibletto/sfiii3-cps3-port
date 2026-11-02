@@ -128,7 +128,7 @@ void rewrite_cd_not_ready(void) {
 /* provisional name */
 s32 rewrite_page(void) {
     register s32 rc;
-    if (no_cd_flag) {
+    if (NO_CD_DRIVE) {
         return -1;
     }
     rc = 0;

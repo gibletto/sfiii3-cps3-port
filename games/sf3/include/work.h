@@ -257,6 +257,12 @@ extern s16 backup_test_no;
 extern s16 config_menu_no;
 extern const s8 * simm_name_tbl[8];
 extern u8 no_cd_flag;
+/* the test pages' check for a CD drive; the host never has one */
+#ifdef HOST_PORT
+#define NO_CD_DRIVE     1
+#else
+#define NO_CD_DRIVE     no_cd_flag
+#endif
 extern s16 memtest_error;
 extern s16 memtest_wait;
 extern s16 memtest_cursor;

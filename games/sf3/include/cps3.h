@@ -10,9 +10,9 @@
 #ifndef CPS3_H
 #define CPS3_H
 
-#define CACHE_THRU      0x20000000      /* cache-through mirror of the address map */
-
 #ifndef HOST_PORT
+
+#define CACHE_THRU      0x20000000      /* cache-through mirror of the address map */
 
 #define WORK_RAM        0x02000000
 #define SRAM            0x23000000      /* byte-wide SRAM on even addresses (sram_read_byte) */
@@ -36,6 +36,7 @@
 /* The host build keeps each block of the board in host memory (port/include/cps3_host.h). The names give its
    host address as a number, as the arcade's did, so the game's address arithmetic works unchanged. */
 #include "cps3_host.h"
+#define CACHE_THRU      0               /* host memory has no cache-through mirror */
 #define WORK_RAM        0x02000000      /* only used as a number (a 16.16 position of 512) outside the memory test */
 #define SRAM            ((u32)cps3_sram)
 #define SPRITE_RAM      ((u32)cps3_sprite_ram)
