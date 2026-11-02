@@ -89,6 +89,8 @@ set(CPS3_SOURCES
     ${PORT}/cps3/simmram.c
     ${PORT}/cps3/sh2_sub.c
     ${PORT}/cps3/host_board.c)
+# 3rd Strike reads the BIOS's CD flag, so the region setting has NO CD versions (cps3_region.c)
+set_source_files_properties(${PORT}/cps3/cps3_region.c PROPERTIES COMPILE_DEFINITIONS CPS3_REGION_NO_CD=1)
 
 if(NINTENDO_3DS)
     add_executable(sf3
@@ -102,6 +104,7 @@ if(NINTENDO_3DS)
         ${PORT}/ctr/ctr_bottom.c
         ${PORT}/ctr/ctr_controls.c
         ${PORT}/cps3/cps3_romset.c
+        ${PORT}/cps3/cps3_region.c
         ${PORT}/ctr/ctr_depth.c)
     target_link_libraries(sf3 PRIVATE sf3_game citro3d ctru z m)
     # ctr_depth.c reads the game's state through the game's headers
@@ -117,6 +120,7 @@ else()
     add_executable(sf3 WIN32
         ${CPS3_SOURCES}
         ${PORT}/cps3/cps3_romset.c
+        ${PORT}/cps3/cps3_region.c
         ${PORT}/sys/coro_win32.c
         ${PORT}/sys/divzero_win32.c
         ${PORT}/sdl/main_sdl.c)

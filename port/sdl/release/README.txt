@@ -33,6 +33,13 @@ punches, A B RT kicks, Start, and Back for a coin.
 
 In the operator menu (F2), CONFIGURATION has the game and coin settings, including free play.
 
+Region: the game plays in the region of the ROM set's BIOS (Europe). To play in another, set REGION in
+roms/settings.ini (written the first time the game runs) to JAPAN, ASIA, EUROPE, USA, HISPANIC, BRAZIL or
+OCEANIA (BIOS goes back). The region also sets the language of the text: Japanese in Japan, Spanish in
+Hispanic, Portuguese in Brazil, English elsewhere. Each region also has a NO CD version, for example ASIA (NO
+CD), as on boards without a CD drive: the title screen says NO CD and the test menu has no GAME REWRITE.
+Changing the region resets the operator settings to that region's, as on the arcade.
+
 You can also start it as sf3.exe <path to sfiii3nr1.zip>.
 
 Street Fighter and Capcom are trademarks of Capcom. This project is not affiliated with or endorsed by Capcom.

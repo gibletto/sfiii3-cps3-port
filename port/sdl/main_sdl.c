@@ -5,7 +5,7 @@
  *
  * The ROM set is MAME's sfiii3nr1.zip, read as it is (cps3_romset.c). With no argument it is looked for in the
  * roms folder next to sf3.exe, then in rom-data folders (bios.bin, cg.bin and user5.bin, as the 3DS unpacks
- * them). The settings EEPROM is saved next to the ROM set.
+ * them). The settings EEPROM is saved next to the ROM set, with settings.ini (the region, cps3_region.c).
  *
  * Runs the board at its 59.59 Hz frame rate with the software renderer. Alt+Enter or F11 toggles full screen,
  * F12 saves frame.bmp, Escape quits.
@@ -19,6 +19,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include <SDL.h>
 
@@ -27,6 +28,7 @@
 #include "cps3_kernel.h"
 #include "cps3_video.h"
 #include "cps3_sound.h"
+#include "cps3_region.h"
 #include "cps3_romset.h"
 
 #define SCALE 3
@@ -280,6 +282,42 @@ static int load_game(const char* arg, char* save_dir, size_t len) {
     return 1;
 }
 
+/* settings.ini, next to the EEPROM: the region. Written the first time, as the 3DS writes its controls.ini */
+static void load_settings(const char* dir) {
+    char path[600];
+    char line[256];
+    int region = CPS3_REGION_BIOS;
+    int found = 0;
+    FILE* f;
+    snprintf(path, sizeof(path), "%s/settings.ini", dir);
+    if ((f = fopen(path, "r")) != NULL) {
+        while (fgets(line, sizeof(line), f) != NULL) {
+            char* eq;
+            char* key;
+            line[strcspn(line, ";#\r\n")] = '\0';
+            if ((eq = strchr(line, '=')) == NULL) {
+                continue;
+            }
+            *eq = '\0';
+            key = strtok(line, " \t");
+            if (key != NULL && strcasecmp(key, "REGION") == 0) {
+                region = cps3_region_find(eq + 1) >= 0 ? cps3_region_find(eq + 1) : CPS3_REGION_BIOS;
+                found = 1;
+            }
+        }
+        fclose(f);
+    }
+    if (!found && (f = fopen(path, "a")) != NULL) {
+        fseek(f, 0, SEEK_END);
+        if (ftell(f) == 0) {
+            fputs("; " TITLE ": settings\n\n", f);
+        }
+        cps3_region_write(f, region);
+        fclose(f);
+    }
+    cps3_region_apply(region);
+}
+
 static void toggle_fullscreen(SDL_Window* win) {
     int full = (SDL_GetWindowFlags(win) & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0;
     SDL_SetWindowFullscreen(win, full ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);
@@ -300,6 +338,7 @@ int main(int argc, char** argv) {
     if (!load_game(argc > 1 ? argv[1] : NULL, dir, sizeof(dir))) {
         return 1;
     }
+    load_settings(dir);
     snprintf(path, sizeof(path), "%s/eeprom.bin", dir);
     cps3_eeprom_load(path);
 

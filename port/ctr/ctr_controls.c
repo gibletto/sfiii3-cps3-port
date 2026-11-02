@@ -1,9 +1,10 @@
 /*
- * ctr_controls.c  Button mapping and the button setup screen (3DS)
+ * ctr_controls.c  Button mapping, the region, and their setup screen (3DS)
  *
  * The mapping is kept in sdmc:/sf3/controls.ini, one line per button: "ZL = LP MP HP". The file is written with
- * the default buttons the first time the game runs. SELECT + R opens the setup screen, which asks for a button
- * for each attack, like an arcade cabinet's button check, and saves the file.
+ * the default buttons the first time the game runs. It also holds the region ("REGION = USA", cps3_region.c).
+ * SELECT + R opens the setup screen, which asks for a button for each attack, like an arcade cabinet's button
+ * check, and saves the file; LEFT and RIGHT change the region there, and START saves just the region.
  *
  * The D-pad and Circle Pad always move, and SELECT is always the coin and menu button.
  */
@@ -16,6 +17,7 @@
 
 #include "types.h"
 #include "cps3_host.h"
+#include "cps3_region.h"
 #include "ctr_controls.h"
 
 #define PUNCHES     (CPS3_IN_LP | CPS3_IN_MP | CPS3_IN_HP)
@@ -47,7 +49,7 @@ static const u32 defaults[NBUTTONS] = {
 };
 
 static const char header[] =
-    "; Street Fighter III 3rd Strike: the 3DS buttons\n"
+    "; Street Fighter III 3rd Strike: the 3DS buttons and the region (at the end)\n"
     ";\n"
     "; Each line is a button and what it does in the game:\n"
     ";   LP MP HP   light, medium and heavy punch\n"
@@ -56,10 +58,11 @@ static const char header[] =
     "; A button can do several at once: \"ZL = LP MP HP\" presses all three punches.\n"
     "; \"none\" turns a button off. The buttons are Y X L B A R ZL ZR START (ZL and ZR are on the New 3DS).\n"
     "; The D-pad and Circle Pad always move, and SELECT is always the coin and menu button.\n"
-    "; In the game, hold SELECT and press R to set the buttons on screen instead.\n"
+    "; In the game, hold SELECT and press R to set the buttons and the region on screen instead.\n"
     "\n";
 
 static u32 map[NBUTTONS];
+static int region = CPS3_REGION_BIOS;
 
 static int find_button(const char* s) {
     int i;
@@ -81,8 +84,9 @@ static u32 find_input(const char* s) {
     return 0;       /* "none" and anything unknown */
 }
 
-/* reads "button = inputs" lines; the buttons a file leaves out do nothing. 0 if it has none */
-static int parse(FILE* f) {
+/* reads "button = inputs" lines and the REGION line; the buttons a file leaves out do nothing. Sets *has_region
+   if the file has a REGION line. 0 if it has no buttons */
+static int parse(FILE* f, int* has_region) {
     char line[256];
     int found = 0;
     while (fgets(line, sizeof(line), f) != NULL) {
@@ -97,6 +101,11 @@ static int parse(FILE* f) {
         }
         *eq = '\0';
         tok = strtok(line, " \t");
+        if (tok != NULL && strcasecmp(tok, "REGION") == 0) {
+            region = cps3_region_find(eq + 1) >= 0 ? cps3_region_find(eq + 1) : CPS3_REGION_BIOS;
+            *has_region = 1;
+            continue;
+        }
         if (tok == NULL || (b = find_button(tok)) < 0) {
             continue;
         }
@@ -132,20 +141,30 @@ static int save(void) {
         }
         fputc('\n', f);
     }
+    fputc('\n', f);
+    cps3_region_write(f, region);
     return fclose(f) == 0;
 }
 
 void ctr_controls_load(void) {
     FILE* f = fopen(CTR_CONTROLS_FILE, "r");
+    int has_region = 0;
     memcpy(map, defaults, sizeof(map));
     if (f == NULL) {
         save();
         return;
     }
-    if (!parse(f)) {
+    if (!parse(f, &has_region)) {
         memcpy(map, defaults, sizeof(map));
     }
     fclose(f);
+    if (!has_region) {
+        save();     /* a file from before the region setting: add its line */
+    }
+}
+
+int ctr_controls_region(void) {
+    return region;
 }
 
 u32 ctr_controls_map(u32 held) {
@@ -175,12 +194,13 @@ enum { RELEASE, ASK, DONE };
 static int phase;
 static int step;                /* the attack being asked for */
 static int pick[NSTEPS];        /* the button chosen for each, or -1 for none */
+static int choice;              /* the region shown, LEFT and RIGHT change it */
 static int frames;
-static const char* result;
+static char result[160];
 
 static void draw(void) {
     int i;
-    printf("\x1b[2J\x1b[2;2HBUTTON SETUP\n\n");
+    printf("\x1b[2J\x1b[2;2HBUTTONS AND REGION\n\n");
     printf(" Press the button for each attack.\n The game waits until you have finished.\n\n");
     for (i = 0; i < NSTEPS; i++) {
         const char* name = "";
@@ -193,10 +213,13 @@ static void draw(void) {
             printf("   %-20s%s\n", steps[i].label, name);
         }
     }
+    printf("\n   Region  \x1b[36m< %s >\x1b[0m\n           %s text\n", cps3_region_label(choice),
+           cps3_region_text(choice));
     if (phase == DONE) {
         printf("\n %s\n", result);
     } else {
-        printf("\n SELECT  no button for this one\n START   cancel, keep the old buttons\n");
+        printf("\n LEFT/RIGHT  change the region\n SELECT      no button for this one\n"
+               " START       keep the old buttons\n             (saves the region)\n");
     }
 }
 
@@ -207,11 +230,22 @@ void ctr_controls_setup_begin(void) {
     }
     phase = RELEASE;
     step = 0;
+    choice = region;
     draw();
 }
 
-static void finish(const char* message) {
-    result = message;
+/* saves the file (the buttons and the region chosen) and shows what happened */
+static void finish(int buttons_set) {
+    int region_set = choice != region;
+    region = choice;
+    if (!buttons_set && !region_set) {
+        snprintf(result, sizeof(result), "Cancelled: nothing changed.");
+    } else if (!save()) {
+        snprintf(result, sizeof(result), "Could not save " CTR_CONTROLS_FILE ",\n but the buttons are set until you quit.");
+    } else {
+        snprintf(result, sizeof(result), "Saved to " CTR_CONTROLS_FILE "%s",
+                 region_set ? ".\n The new region is used the next\n time the game starts." : "");
+    }
     phase = DONE;
     frames = 0;
     draw();
@@ -229,7 +263,12 @@ int ctr_controls_setup_frame(void) {
         return 1;
     case ASK:
         if (down & KEY_START) {
-            finish("Cancelled: the buttons are unchanged.");
+            finish(0);
+            return 1;
+        }
+        if (down & (KEY_LEFT | KEY_RIGHT)) {
+            choice = (choice + (down & KEY_LEFT ? cps3_region_count() - 1 : 1)) % cps3_region_count();
+            draw();
             return 1;
         }
         if (down & KEY_SELECT) {
@@ -261,8 +300,7 @@ int ctr_controls_setup_frame(void) {
                 map[pick[i]] |= steps[i].in;
             }
         }
-        finish(save() ? "Saved to " CTR_CONTROLS_FILE
-                      : "Could not save " CTR_CONTROLS_FILE ",\n but the buttons are set until you quit.");
+        finish(1);
         return 1;
     default:            /* show the result, then wait for the buttons to be let go */
         return ++frames < 90 || (held & ANY_BUTTON) != 0;

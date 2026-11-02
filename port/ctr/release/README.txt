@@ -37,13 +37,21 @@ unpack", about a minute). After that you can delete the zip.
     SELECT               insert a coin
     SELECT + START       operator (test) menu: settings, free play
     SELECT + L           service coin (a free credit)
-    SELECT + R           button setup
+    SELECT + R           button and region setup
     SELECT + B           quit
 
 Changing the buttons: hold SELECT and press R. The game pauses and the bottom screen asks you to press the
 button for each attack in turn (SELECT for none, START to cancel). The buttons are saved in
 sdmc:/sf3/controls.ini, which you can also edit on a PC: each line is a button and what it does, and a button
 can do several things at once, for example "R = HP HK".
+
+Region: the game plays in the region of the ROM set's BIOS (Europe). To play in another, hold SELECT and press
+R, choose the region with LEFT and RIGHT, and press START (or set the buttons, which saves it too). The new
+region is used the next time the game starts. It is saved as the REGION line at the end of
+sdmc:/sf3/controls.ini. The region also sets the language of the text: Japanese in Japan, Spanish in Hispanic,
+Portuguese in Brazil, English elsewhere. Each region also has a NO CD version, for example ASIA (NO CD), as on
+boards without a CD drive: the title screen says NO CD and the test menu has no GAME REWRITE. Changing the
+region resets the operator settings to that region's, as on the arcade.
 
 In the operator menu, CONFIGURATION has the game and coin settings, including free play. Settings and high
 scores are saved in sdmc:/sf3/rom-data/eeprom.bin.
