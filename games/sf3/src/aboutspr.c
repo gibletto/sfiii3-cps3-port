@@ -318,7 +318,11 @@ u16 id;
 
 /* provisional name */
 static s32 cg_data_exist(u16 id) {
+#ifdef HOST_PORT
+    if (cg_data_list[id].set != 0 && cg_data_list[id].set != host_cg_bios_set) {    /* null on the board */
+#else
     if (cg_data_list[id].set != 0) {
+#endif
         return 1;
     }
     return 0;
@@ -385,7 +389,11 @@ u16 id;
 s32 check_cg_data(id)
 u16 id;
 {
+#ifdef HOST_PORT
+    if (cg_data_list[id].set != 0 && cg_data_list[id].set != host_cg_bios_set) {    /* null on the board */
+#else
     if (cg_data_list[id].set != 0) {
+#endif
         return 1;
     }
     return 0;

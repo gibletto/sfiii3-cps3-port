@@ -1480,6 +1480,7 @@ extern const u8* const snd_bank_rom_tbl[];
 #ifdef HOST_PORT
 /* the host loads the directory from the ROM set (port/cps3/cps3_hw.c) */
 extern CharGfxEntry* host_cg_data_tbl;
+extern CharGfxSet* host_cg_bios_set;    /* an empty entry's set: the BIOS bytes at address 0 */
 #define cg_data_tbl host_cg_data_tbl
 #else
 extern const CharGfxEntry cg_data_tbl[4096];

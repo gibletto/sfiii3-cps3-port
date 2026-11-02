@@ -21,6 +21,11 @@
 #include "bg_sub_4.h"
 #include "bg_sub_5.h"
 #include "se_3.h"
+#ifdef HOST_PORT
+#include "host_null.h"
+#else
+#define NULL_READ(p, field) ((p)->field)
+#endif
 #include "cps3.h"
 
 void sound_reg_level_set(s16 pitch, s8 volume);
@@ -118,7 +123,8 @@ void Se_Shock(WORK_Other* ewk, u16 Code) {
             em = (PLW*)((PLW*)ewk->my_master)->wu.target_adrs;
             uid = ewk->master_id;
         }
-        if (em->wu.work_id == 1 && em->wu.vital_new < 0) {
+        /* em is null when the master has no target (an effect in a demo): the board reads the BIOS */
+        if (NULL_READ(em, wu.work_id) == 1 && NULL_READ(em, wu.vital_new) < 0) {
             i = 0;
             ofs = 0x27;
             for (; i < 7; i++) {
@@ -217,7 +223,8 @@ void Se_Let_SP(WORK_Other* ewk, u16 Code) {
         } else {
             uid = ewk->master_id;
         }
-        if (em->wu.work_id == 1 && em->wu.vital_new < 0) {
+        /* em is null when the master has no target (an effect in a demo): the board reads the BIOS */
+        if (NULL_READ(em, wu.work_id) == 1 && NULL_READ(em, wu.vital_new) < 0) {
             if (Code == 0x14B) {
                 Code = 0x158;
             }
