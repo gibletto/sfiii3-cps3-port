@@ -1,22 +1,28 @@
 #!/usr/bin/env python3
 """Copies the game's data files so they are laid out in memory as on the arcade board.
 
-    python port/tools/host_data.py [--big-endian] <out dir> <data .c files...>
+    python port/tools/host_data.py [--big-endian] [--images <name>:<size>,...] [--src <code dir>]
+                                   <out dir> <data .c files...>
 
 The game finds some data by position (a script's header is the array just before it, sound sequences are
 offsets into the arrays that follow). GCC pads larger arrays, so each array definition gets an explicit
-alignment equal to its element's. The build compiles the copies; games/sf3 is left as it is.
+alignment equal to its element's. The build compiles the copies; the game's own files are left as they are.
 
 Some reads run past the end of a table into the next one, which on a little-endian host holds its 16- and 32-bit
 elements in the other byte order. Each copy also lists its runs of such tables (host_ranges_<file>, in a section
 of their own, so the game's own layout is untouched), and <out dir>/host_data_ranges.c lists the lists, for
 port/cps3/host_board.c to read such bytes in the board's order.
+
+--images names the 16- and 32-bit tables the game reads a byte at a time, with their element size: on a
+little-endian host they are byte-swapped so the bytes come out in the board's order. The list is checked against
+the data files (each must be there, with elements of that size) and, with --src, against the code: a 16- or
+32-bit table the code reads through a byte pointer must be in it.
 """
 import pathlib, re, sys
 
-# u16 tables the game reads a byte at a time: byte-swapped on little-endian hosts so the bytes come out in the
-# board's order
-BYTE_IMAGES = {"sys_font_cg", "sc_chr_data", "gill_sa_number_chr"}
+BYTE_IMAGES = {}        # --images: name -> element size
+# 32-bit tables the code passes on as a byte pointer but reads as words: the sound data (sound_init)
+WORD_TABLES = {"snd_seq_rom_data"}
 LITTLE_ENDIAN = True    # --big-endian for big-endian targets, which take the tables as they are
 NUMBER = re.compile(r"\b(0[xX][0-9A-Fa-f]+|\d+)\b")
 
@@ -26,8 +32,17 @@ def swap16(m):
     return "0x%04X" % (((v & 0xFF) << 8) | (v >> 8))
 
 
+def swap32(m):
+    v = int(m.group(1), 0) & 0xFFFFFFFF
+    return "0x%08X" % int.from_bytes(v.to_bytes(4, "big"), "little")
+
+
 DEF = re.compile(r"^(?P<decl>(?:static\s+)?const\s+[^=;(]*?\b(?P<name>[A-Za-z_]\w*)\s*(?:\[[^\]]*\])+)\s*=")
 UNIT = {"s16": 2, "u16": 2, "s32": 4, "u32": 4}     # element types held in the host's byte order, and their size
+TYPES = {}      # the tables' element types, from the data files
+# a cast of a table itself (not of one of its elements) to a byte pointer
+BYTE_CAST = re.compile(r"\(\s*(?:const\s+)?(?:u8|s8|char|unsigned\s+char|signed\s+char)\s*(?:const\s*)?\*\s*\)"
+                       r"\s*&?\s*\(?\s*([A-Za-z_]\w*)\b(?!\s*\[)")
 # The constants (the board's ROM data) go in a section of their own, in link order, so the constants of the code
 # files linked between them (jump tables, strings) don't come between them. CONST matches the ones DEF doesn't:
 # single values and tables of function pointers.
@@ -68,6 +83,7 @@ def transform(text, src):
         elif m:
             decl, name = m.group("decl"), m.group("name")
             base = [w for w in line[:m.start("name")].split() if w != "const"]
+            TYPES[name] = " ".join(base)
             rest = line[m.end("decl"):]
             line = f"extern {decl}; {decl} __attribute__((aligned(__alignof__({name}[0]))))" + rom(m) + rest
             if name in BYTE_IMAGES:
@@ -88,12 +104,33 @@ def transform(text, src):
                 image = None
             elif LITTLE_ENDIAN:
                 code, sep, comment = line.partition("/*")
-                line = NUMBER.sub(swap16, code) + sep + comment
+                line = NUMBER.sub(swap16 if BYTE_IMAGES[image] == 2 else swap32, code) + sep + comment
         out.append(line)
     close()
     if ranges:
         out += ["", RANGE_TYPE, f"struct host_range host_ranges_{stem(src)}[] __attribute__((section(\"host_ranges\"))) = {{"] + ranges + ["    { 0, 0, 0, 0 },", "};"]
     return "\n".join(out) + "\n", bool(ranges)
+
+
+def check_images(code):
+    """What is wrong with the --images list: a table the data files don't have or with other elements, or (with
+    the code directory) a 16- or 32-bit table the code reads through a byte pointer that isn't in it."""
+    problems = []
+    for name, size in sorted(BYTE_IMAGES.items()):
+        if name not in TYPES:
+            problems.append(f"{name} is not in the data files")
+        elif UNIT.get(TYPES[name]) != size:
+            problems.append(f"{name} has {TYPES[name]} elements, not {size}-byte ones")
+    if code:
+        for f in sorted(pathlib.Path(code).rglob("*.c")):
+            text = f.read_text(encoding="utf-8", errors="surrogateescape")
+            for m in BYTE_CAST.finditer(text):
+                name = m.group(1)
+                if UNIT.get(TYPES.get(name)) and name not in BYTE_IMAGES and name not in WORD_TABLES:
+                    line = text.count("\n", 0, m.start()) + 1
+                    problems.append(f"{f.name}:{line} reads {name} ({TYPES[name]}) through a byte pointer, "
+                                    "but it is not in --images")
+    return problems
 
 
 def stem(src):
@@ -108,9 +145,19 @@ def write(dst, text):
 def main():
     global LITTLE_ENDIAN
     args = sys.argv[1:]
-    if args and args[0] == "--big-endian":
-        LITTLE_ENDIAN = False
-        args = args[1:]
+    code = None
+    while args and args[0].startswith("--"):
+        opt = args.pop(0)
+        if opt == "--big-endian":
+            LITTLE_ENDIAN = False
+        elif opt == "--images":
+            for item in args.pop(0).split(","):
+                name, _, size = item.partition(":")
+                BYTE_IMAGES[name.strip()] = int(size)
+        elif opt == "--src":
+            code = args.pop(0)
+        else:
+            sys.exit(f"host_data.py: unknown option {opt}")
     outdir = pathlib.Path(args[0])
     outdir.mkdir(parents=True, exist_ok=True)
     lists = []
@@ -120,6 +167,9 @@ def main():
         write(outdir / src.name, text)
         if listed:
             lists.append(f"host_ranges_{stem(src)}")
+    problems = check_images(code)
+    if problems:
+        sys.exit("host_data.py: the byte images (--images) don't fit the game:\n  " + "\n  ".join(problems))
     write(outdir / "host_data_ranges.c",
           "/* the data files' lists of their 16- and 32-bit tables (port/tools/host_data.py) */\n" + RANGE_TYPE + "\n"
           + "".join(f"extern struct host_range {n}[];\n" for n in lists)

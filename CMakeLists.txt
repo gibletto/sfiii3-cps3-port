@@ -29,9 +29,15 @@ foreach(f ${GAME_DATA})
 endforeach()
 # the lists of the 16- and 32-bit tables, for reads past the end of a table (port/cps3/host_board.c)
 list(APPEND HOST_DATA ${HOST_DATA_DIR}/host_data_ranges.c)
+# the 16- and 32-bit tables the game reads a byte at a time, with their element size: byte-swapped on
+# little-endian hosts so the bytes come out in the board's order. host_data.py checks the list against the
+# data files and the code.
+set(BYTE_IMAGES sys_font_cg:2,sc_chr_data:2,gill_sa_number_chr:2)
+file(GLOB_RECURSE GAME_CODE ${GAME}/src/*.c)
 add_custom_command(OUTPUT ${HOST_DATA}
-    COMMAND Python3::Interpreter ${PORT}/tools/host_data.py ${HOST_DATA_DIR} ${GAME_DATA}
-    DEPENDS ${GAME_DATA} ${PORT}/tools/host_data.py
+    COMMAND Python3::Interpreter ${PORT}/tools/host_data.py --images ${BYTE_IMAGES} --src ${GAME}/src
+            ${HOST_DATA_DIR} ${GAME_DATA}
+    DEPENDS ${GAME_DATA} ${GAME_CODE} ${PORT}/tools/host_data.py
     COMMENT "Laying out the game data for the host")
 
 file(GLOB GAME_SOURCES ${GAME}/src/*.c)
