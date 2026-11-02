@@ -39,8 +39,11 @@ jobs:
           ref: ${{ github.event.release.tag_name || inputs.tag || github.ref }}
 
       - name: Build
+        env:
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
         run: |
-          cmake -G Ninja -B build-3ds -DCMAKE_TOOLCHAIN_FILE=port/cmake/3ds-native.cmake -DDEVKITPRO="$DEVKITPRO"
+          cmake -G Ninja -B build-3ds -DCMAKE_TOOLCHAIN_FILE=port/cmake/3ds-native.cmake -DDEVKITPRO="$DEVKITPRO" \
+            -DPORT_VERSION="$TAG"
           ninja -C build-3ds sf3
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -85,10 +88,13 @@ jobs:
 
       - name: Make the CIA
         # the same steps as ctr_create_cia in port/cmake/3ds-native.cmake
+        env:
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
         run: |
           dir=port/ctr/cia
+          version="${TAG:-$(git rev-parse --short=7 HEAD)}"
           tools-bin/bannertool makebanner -i $dir/banner.png -a $dir/banner.wav -o build-3ds/sf3.bnr
-          tools-bin/bannertool makesmdh -s "SF III 3rd Strike" -l "Street Fighter III 3rd Strike (CPS3 port)" \
+          tools-bin/bannertool makesmdh -s "SF III 3rd Strike" -l "Street Fighter III 3rd Strike (CPS3 port) $version" \
             -p "sfiii3-cps3-port" -i $dir/icon.png -o build-3ds/sf3.cia.smdh
           tools-bin/makerom -f cia -o build-3ds/sf3.cia -target t -exefslogo -elf build-3ds/sf3 \
             -rsf $dir/sf3.rsf -icon build-3ds/sf3.cia.smdh -banner build-3ds/sf3.bnr -DAPP_ROMFS=port/ctr/romfs
