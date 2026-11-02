@@ -102,20 +102,11 @@ s8 Rnd;  /* 0200DCF5 */
 
 
 
-/* Both are called with the PLW* in R4 and tail-jump to Next_Be_Free with R4 as it came in. */
-#ifdef HOST_PORT
 void End_Pattern(PLW* wk) { Next_Be_Free(wk); }
 
 
 
 void Next_Be_Passive(PLW* wk) { Next_Be_Free(wk); }
-#else
-void End_Pattern(void) { Next_Be_Free(); }
-
-
-
-void Next_Be_Passive(void) { Next_Be_Free(); }
-#endif
 
 
 

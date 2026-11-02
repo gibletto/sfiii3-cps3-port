@@ -35,6 +35,7 @@
 #include "aboutspr.h"
 #include "cps3.h"
 #include "SHELL14.h"
+#include "textsound.h"
 
 /* the first byte of a 16-bit field as the board stores it: its high byte */
 #ifdef HOST_LITTLE_ENDIAN

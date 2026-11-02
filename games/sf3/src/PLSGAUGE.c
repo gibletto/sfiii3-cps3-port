@@ -344,11 +344,7 @@ s16 check_buttobi_type(PLW* wk) {
 
 s32 check_buttobi_type2(WORK* wk) {
     s32 dir;
-#ifdef HOST_PORT
-    setup_butt_own_data(wk);    /* R4 is still wk on the board */
-#else
-    setup_butt_own_data();
-#endif
+    setup_butt_own_data(wk);
     dir = cal_move_dir_forecast(wk, 5);
     return dir32_grddm[dir];
 }

@@ -237,8 +237,6 @@ void player_mv_2000(PLW* wk) {
     Player_normal(wk);
 }
 
-/* Called with the PLW* in R4; both branches tail-jump with R4 untouched, handing it on. */
-#ifdef HOST_PORT
 void player_mv_3000(PLW* wk) {
     if (gouki_app) {
         jijii_nebukuro(wk);
@@ -246,15 +244,6 @@ void player_mv_3000(PLW* wk) {
         Player_normal(wk);
     }
 }
-#else
-void player_mv_3000(void) {
-    if (gouki_app) {
-        jijii_nebukuro();
-    } else {
-        Player_normal();
-    }
-}
-#endif
 
 
 

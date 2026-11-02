@@ -55,6 +55,8 @@
 #include "SYS_sub.h"
 #include "cps3.h"
 
+void Scrn_Move_Set(s32 n, s16 x, s16 y);
+
 
 
 /* Clears the text layer and runs System_all_clear, then waits a frame. */

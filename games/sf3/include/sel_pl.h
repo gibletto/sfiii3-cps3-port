@@ -51,7 +51,7 @@ void Sel_PL_Sub_CD(s16 PL_id);
 void Sel_PL_Sub_CL(s16 PL_id);
 void Sel_PL_Sub_CR(s16 PL_id);
 void Sel_PL_Sub_CU(s16 PL_id);
-s16 Select_Player(void);
+s32 Select_Player(void);
 u8 Setup_Aborigine(void);
 void Setup_EFF69(void);
 void Setup_FACE_BG(void);

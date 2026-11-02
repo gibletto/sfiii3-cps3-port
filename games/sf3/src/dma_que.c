@@ -17,6 +17,7 @@
 #include "sys_config_2.h"
 #include "sys_config_3.h"
 #include "cps3.h"
+#include "cram_bank.h"
 #ifdef HOST_PORT
 #include "cps3_host.h"
 /* the host's video DMA runs when the game writes its start bit */

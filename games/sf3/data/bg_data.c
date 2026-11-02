@@ -41,11 +41,7 @@ const s16 bg_index_tbl_tail[73] = {
 BGW * bgw_ptr;  /* 02026FF4 */
 SUZI_CALC suzi_calc_w[2];  /* 02026FF8 */
 Ideal_W ideal_w;  /* 02027008 */
-#ifdef HOST_PORT
-u16 suzi_line_buf[2048] __attribute__((aligned(4)));  /* 02027010; read and written as s32s too */
-#else
-u16 suzi_line_buf[2048];  /* 02027010 */
-#endif
+SUZI_LINE_BUF suzi_line_buf;  /* 02027010 */
 MVXY bg_mvxy;  /* 02028010 */
 s16 bg_stop;  /* 02028028 */
 s8 bg_app_stop;  /* 0202802A */
