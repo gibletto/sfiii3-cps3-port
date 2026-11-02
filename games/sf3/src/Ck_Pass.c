@@ -15,6 +15,11 @@
 #include "structs.h"
 #include "work.h"
 #include "romdata.h"
+#ifdef HOST_PORT
+#include "host_board.h"    /* PL_Blow_Off_Data is read past its end, into Hit_Range_Data */
+#else
+#define BOARD_READ(tbl, i) ((tbl)[i])
+#endif
 #include "extern.h"
 #include "Com_Pl.h"
 #include "PLS03ATT.h"
@@ -915,7 +920,7 @@ s32 Check_Blow_Off(PLW* wk, WORK* em, s16 VS_Technique) {
     if (em->routine_no[1] != PLAYER_DAMAGE) {
         return 0;
     }
-    if (PL_Blow_Off_Data[em->routine_no[2]] == 0) {
+    if (BOARD_READ(PL_Blow_Off_Data, em->routine_no[2]) == 0) {
         return 0;
     }
     if (em->xyz[1].disp.pos == 0) {

@@ -18,6 +18,11 @@
 #include "structs.h"
 #include "work.h"
 #include "romdata.h"
+#ifdef HOST_PORT
+#include "host_board.h"    /* Width_Data_76 is read past its end, into Victory_Color_Data */
+#else
+#define BOARD_READ(tbl, i) ((tbl)[i])
+#endif
 #include "extern.h"
 #include "SYS_sub.h"
 #include "EFFA6.h"
@@ -264,7 +269,7 @@ s32 effect_76_init(s16 dir_old) {
     ewk->wu.char_table[0] = sel_pl_char_table;
     ewk->wu.dir_old = dir_old;
     ewk->wu.direction = 2;
-    ewk->wu.dm_vital = Width_Data_76[dir_old - 43];
+    ewk->wu.dm_vital = BOARD_READ(Width_Data_76, dir_old - 43);
     Setup_Char_76(ewk);
     Setup_Pos_76(ewk);
     return 0;

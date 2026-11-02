@@ -27,6 +27,8 @@ foreach(f ${GAME_DATA})
     get_filename_component(n ${f} NAME)
     list(APPEND HOST_DATA ${HOST_DATA_DIR}/${n})
 endforeach()
+# the lists of the 16- and 32-bit tables, for reads past the end of a table (port/cps3/host_board.c)
+list(APPEND HOST_DATA ${HOST_DATA_DIR}/host_data_ranges.c)
 add_custom_command(OUTPUT ${HOST_DATA}
     COMMAND Python3::Interpreter ${PORT}/tools/host_data.py ${HOST_DATA_DIR} ${GAME_DATA}
     DEPENDS ${GAME_DATA} ${PORT}/tools/host_data.py
@@ -68,7 +70,8 @@ set(CPS3_SOURCES
     ${PORT}/cps3/cps3_eeprom.c
     ${PORT}/cps3/cps3_sound.c
     ${PORT}/cps3/simmram.c
-    ${PORT}/cps3/sh2_sub.c)
+    ${PORT}/cps3/sh2_sub.c
+    ${PORT}/cps3/host_board.c)
 
 if(NINTENDO_3DS)
     add_executable(sf3

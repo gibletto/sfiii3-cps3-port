@@ -10,6 +10,11 @@
 #include "structs.h"
 #include "work.h"
 #include "romdata.h"
+#ifdef HOST_PORT
+#include "host_board.h"    /* PL_Blow_Off_Data is read past its end, into Hit_Range_Data */
+#else
+#define BOARD_READ(tbl, i) ((tbl)[i])
+#endif
 #include "extern.h"
 #include "Com_Sub.h"
 #include "ACTIVE00.h"
@@ -335,7 +340,7 @@ void Com_Guard(PLW* wk) {
     if (Check_Flip(wk)) {
         return;
     }
-    if (wk->wu.routine_no[1] == PLAYER_DAMAGE && PL_Blow_Off_Data[wk->wu.routine_no[2]] == 2) {
+    if (wk->wu.routine_no[1] == PLAYER_DAMAGE && BOARD_READ(PL_Blow_Off_Data, wk->wu.routine_no[2]) == 2) {
         Next_Be_Float(wk);
         return;
     }
@@ -636,7 +641,7 @@ void Damage_1st(PLW* wk) {
             CP_No[wk->wu.id][1] = DMG_FAINT;
             break;
         }
-        if (PL_Blow_Off_Data[wk->wu.routine_no[2]] == 0) {
+        if (BOARD_READ(PL_Blow_Off_Data, wk->wu.routine_no[2]) == 0) {
             CP_No[wk->wu.id][1] = DMG_HIT;
             break;
         }

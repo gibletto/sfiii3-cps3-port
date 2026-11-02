@@ -17,6 +17,11 @@
 #include "structs.h"
 #include "work.h"
 #include "romdata.h"
+#ifdef HOST_PORT
+#include "host_board.h"    /* Power_Lv_Data is read past its end, into the tables after it */
+#else
+#define BOARD_READ(tbl, i) ((tbl)[i])
+#endif
 #include "extern.h"
 #include "Com_Pl.h"
 #include "PLS03ATT.h"
@@ -2731,7 +2736,7 @@ s16 Ex_Shot;
         CP_Index[wk->wu.id][1]++;
         Check_First_Menu(wk);
         if (Power_Level & 0x4000) {
-            Free_Lever[wk->wu.id] = Power_Lv_Data[(Power_Level & 0xF) - 8];
+            Free_Lever[wk->wu.id] = BOARD_READ(Power_Lv_Data, (Power_Level & 0xF) - 8);
         } else {
             Free_Lever[wk->wu.id] = 0;
         }
