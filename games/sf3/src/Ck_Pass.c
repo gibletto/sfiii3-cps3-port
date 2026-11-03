@@ -34,7 +34,7 @@
 
 #ifdef HOST_PORT
 /* Check_VS_Jump's Height, which KEN_vs, HUGO_vs, GILL_vs and VS_NO12_DS leave out. On the board it is what the
-   checks before the call left in R7 (docs/port/call-audit-analysis.md, from the program's disassembly); Height
+   checks before the call left in R7 (found in the program's disassembly); Height
    only matters while the opponent is coming down. */
 
 /* cases 4 and 5: the last check before the call took R7 as its fourth argument, Check_Special_Technique's 0 or

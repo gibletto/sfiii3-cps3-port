@@ -36,7 +36,7 @@ set(BYTE_IMAGES sys_font_cg:2,sc_chr_data:2,gill_sa_number_chr:2)
 file(GLOB_RECURSE GAME_CODE ${GAME}/src/*.c)
 add_custom_command(OUTPUT ${HOST_DATA}
     COMMAND Python3::Interpreter ${PORT}/tools/host_data.py --images ${BYTE_IMAGES} --src ${GAME}/src
-            ${HOST_DATA_DIR} ${GAME_DATA}
+            --data ${GAME}/data ${HOST_DATA_DIR}
     DEPENDS ${GAME_DATA} ${GAME_CODE} ${PORT}/tools/host_data.py
     COMMENT "Laying out the game data for the host")
 
@@ -76,7 +76,8 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86|i686|AMD64|i386")
 endif()
 # Optimised (-O2). Where the game reads the value of a function that can end without returning one, the
 # function returns what the board leaves in R0 there (#ifdef HOST_PORT, from the program's disassembly).
-target_compile_options(sf3_game PRIVATE -O2)
+# Address 0 is the BIOS on the board, so the optimiser must not assume a pointer that was read through is non-null.
+target_compile_options(sf3_game PRIVATE -O2 -fno-delete-null-pointer-checks)
 
 # the board: memory, kernel, video, sound, EEPROM
 set(CPS3_SOURCES
@@ -129,7 +130,8 @@ else()
     set(SYM_PREFIX "_")     # i686 C symbols have a leading underscore
 endif()
 target_include_directories(sf3 PRIVATE ${PORT}/sys)
-target_compile_options(sf3 PRIVATE -O2 -std=gnu17 -fwrapv -fno-strict-aliasing -fsigned-char -Wall -Wno-unused-variable)
+target_compile_options(sf3 PRIVATE -O2 -std=gnu17 -fwrapv -fno-strict-aliasing -fsigned-char -fno-delete-null-pointer-checks
+                       -Wall -Wno-unused-variable)
 
 # symbol aliases from the original link script (sf3.sub)
 set(SF3_DEFSYMS

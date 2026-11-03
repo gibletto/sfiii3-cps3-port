@@ -5,7 +5,8 @@
  * graphics SIMMs into the graphics ROM (user5.bin).
  *
  * Takes a non-merged sfiii3nr1.zip, or a split set (sfiii3nr1.zip next to its parent sfiii3.zip), or a merged
- * sfiii3.zip that keeps sfiii3nr1's own files in a sfiii3nr1 folder.
+ * sfiii3.zip that keeps sfiii3nr1's own files in a sfiii3nr1 folder. A sfiii3nr1.zip whose files are in a folder
+ * (unzipped and zipped again) works too.
  */
 
 #include <stdio.h>
@@ -89,8 +90,12 @@ static int zip_open(Zip* z, const char* path) {
         return 0;
     }
     for (k = 0, pos = 0; k < count && pos + 46 <= cd_size && le32(cd + pos) == 0x02014B50; k++) {
-        Entry* e = &z->e[z->n++];
+        Entry* e;
         u32 nlen = le16(cd + pos + 28);
+        if (pos + 46 + nlen > cd_size) {
+            break;                      /* a damaged directory: keep the entries read so far */
+        }
+        e = &z->e[z->n++];
         e->method = le16(cd + pos + 10);
         e->crc = le32(cd + pos + 16);
         e->csize = le32(cd + pos + 20);
@@ -114,28 +119,43 @@ static void zip_close(Zip* z) {
     memset(z, 0, sizeof(*z));
 }
 
-/* the name ends with suffix ("sfiii3-simm3.0", or ".29f400.u2" for the BIOS) */
-static int name_is(const char* name, const char* suffix, int folder) {
+enum { TOP, CLONE_FOLDER, ANY_FOLDER };
+
+/* the name ends with suffix ("sfiii3-simm3.0", or ".29f400.u2" for the BIOS), at the zip's top level or in a
+   folder */
+static int name_is(const char* name, const char* suffix, int where) {
     size_t n = strlen(name), m = strlen(suffix);
     const char* base = strrchr(name, '/');
-    if (folder) {
-        return base != NULL && (size_t)(base - name) == strlen(CLONE) && strncasecmp(name, CLONE, strlen(CLONE)) == 0 &&
-               n >= m && strcasecmp(name + n - m, suffix) == 0;
+    if (n < m || strcasecmp(name + n - m, suffix) != 0) {
+        return 0;
     }
-    return base == NULL && n >= m && strcasecmp(name + n - m, suffix) == 0;
+    if (where == CLONE_FOLDER) {
+        return base != NULL && (size_t)(base - name) == strlen(CLONE) && strncasecmp(name, CLONE, strlen(CLONE)) == 0;
+    }
+    return where == ANY_FOLDER ? base != NULL : base == NULL;
 }
 
-static const Entry* find(Zip** in, const char* suffix) {
-    int zi, folder;
+static const Entry* find_in(Zip* z, const char* suffix, int where) {
     u32 k;
+    for (k = 0; k < z->n; k++) {
+        if (name_is(z->e[k].name, suffix, where)) {
+            return &z->e[k];
+        }
+    }
+    return NULL;
+}
+
+/* Looks in the zip, then in its parent. A merged set's own files are in the clone's folder. A zip whose files
+   were put in a folder (unzipped and zipped again) is read too. */
+static const Entry* find(Zip** in, const char* suffix) {
+    const Entry* e;
+    int zi;
     for (zi = 0; zi < 2; zi++) {
-        for (folder = zips[zi].merged; folder >= 0; folder--) {
-            for (k = 0; k < zips[zi].n; k++) {
-                if (name_is(zips[zi].e[k].name, suffix, folder)) {
-                    *in = &zips[zi];
-                    return &zips[zi].e[k];
-                }
-            }
+        Zip* z = &zips[zi];
+        if ((z->merged && (e = find_in(z, suffix, CLONE_FOLDER)) != NULL) || (e = find_in(z, suffix, TOP)) != NULL ||
+            (zi == 0 && !z->merged && (e = find_in(z, suffix, ANY_FOLDER)) != NULL)) {
+            *in = z;
+            return e;
         }
     }
     return NULL;
@@ -245,6 +265,11 @@ static int build(u8* bios, u8** cg_out, User5Put put, void* ctx) {
     int simm, pair, c;
 
     /* BIOS: one 512 KB chip, encrypted. The set has two; the port uses the European one. */
+    if (find(&z, BIOS) == NULL && find(&z, ".29f400.u2") == NULL) {
+        snprintf(cps3_romset_error, sizeof(cps3_romset_error), "The ROM set has no BIOS (a .29f400.u2 file).\nIt "
+                 "needs MAME's non-merged " CLONE ".zip.");
+        return 0;
+    }
     if ((raw = read_member(find(&z, BIOS) != NULL ? BIOS : ".29f400.u2", CPS3_BIOS_SIZE)) == NULL) {
         return 0;
     }

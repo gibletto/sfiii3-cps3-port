@@ -17,6 +17,7 @@
 
 #include "types.h"
 #include "cps3_host.h"
+#include "cps3_file.h"
 #include "cps3_region.h"
 #include "ctr_controls.h"
 
@@ -122,7 +123,7 @@ static int parse(FILE* f, int* has_region) {
 }
 
 static int save(void) {
-    FILE* f = fopen(CTR_CONTROLS_FILE, "w");
+    FILE* f = cps3_file_begin(CTR_CONTROLS_FILE, "w");
     int b;
     u32 i;
     if (f == NULL) {
@@ -143,12 +144,14 @@ static int save(void) {
     }
     fputc('\n', f);
     cps3_region_write(f, region);
-    return fclose(f) == 0;
+    return cps3_file_commit(f, CTR_CONTROLS_FILE);
 }
 
 void ctr_controls_load(void) {
-    FILE* f = fopen(CTR_CONTROLS_FILE, "r");
+    FILE* f;
     int has_region = 0;
+    cps3_file_recover(CTR_CONTROLS_FILE);
+    f = fopen(CTR_CONTROLS_FILE, "r");
     memcpy(map, defaults, sizeof(map));
     if (f == NULL) {
         save();

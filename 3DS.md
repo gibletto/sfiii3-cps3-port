@@ -27,13 +27,16 @@ slow to do.
 | SELECT | insert a coin |
 | SELECT + START | operator (test) menu |
 | SELECT + L | service coin (a free credit) |
-| SELECT + R | button setup |
+| SELECT + R | button and region setup |
 | SELECT + B | quit |
 
 **Changing the buttons.** Hold SELECT and press R. The game pauses, and the bottom screen asks you to press a
 button for each attack in turn, like the button check on an arcade cabinet. The buttons are saved to
 `sdmc:/sf3/controls.ini`. You can also edit that file on a PC; there a button can press several at once, for
 example `R = HP HK`.
+
+**Changing the region.** On the same screen, LEFT and RIGHT choose the region (Japan, Asia, Europe, USA and so
+on) and START saves it. The game uses it the next time it starts.
 
 Hold SELECT and press START to open the arcade's operator menu. Go to CONFIGURATION to change the settings:
 difficulty, round time, coins per credit, and **free play**. The settings are saved to the SD card like on the
@@ -82,9 +85,9 @@ A few more tricks keep the processor's work small:
 - **Loading in spare time.** Between scenes the game unpacks a lot of graphics at once. The port spreads that
   work into the time each frame spends waiting for the screen to refresh, and a load whose data is still on the
   SD card waits for it there instead of holding up the game.
-- **An optimised build.** The port and the game are compiled with optimisation, except the few game files whose
-  results depend on unoptimised code (functions that end without returning a value). Those stay as they were,
-  so the game plays exactly as before.
+- **An optimised build.** The port and the game are compiled with optimisation. Where the game uses the result
+  of a function that can end without returning one, the port returns what the arcade board would have, so the
+  game plays exactly as before.
 
 ## Building it yourself
 

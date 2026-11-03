@@ -19,9 +19,12 @@
 u32 host_board_read(const void* p, u32 size);    /* the big-endian value of the size bytes at p */
 
 #define BOARD_READ(tbl, i)                                                                                      \
-    ((unsigned long)(i) < sizeof(tbl) / sizeof((tbl)[0])                                                        \
-         ? (tbl)[i]                                                                                             \
-         : (__typeof__((tbl)[0]))host_board_read((const char*)(tbl) + (long)(i) * (long)sizeof((tbl)[0]),      \
-                                                 sizeof((tbl)[0])))
+    __extension__({                                                                                             \
+        long board_read_i = (long)(i);                                                                          \
+        (unsigned long)board_read_i < sizeof(tbl) / sizeof((tbl)[0])                                            \
+            ? (tbl)[board_read_i]                                                                               \
+            : (__typeof__((tbl)[0]))host_board_read((const char*)(tbl) + board_read_i * (long)sizeof((tbl)[0]), \
+                                                    sizeof((tbl)[0]));                                          \
+    })
 
 #endif

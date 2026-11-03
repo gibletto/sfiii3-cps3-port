@@ -57,26 +57,17 @@ coro* coro_self(void) {
     return current;
 }
 
-coro* coro_create(void (*fn)(void*), void* arg, unsigned stack_size) {
-    coro* c = calloc(1, sizeof(coro));
+/* sets the stack up to start fn from the beginning */
+static void start_on_stack(coro* c, void (*fn)(void*), void* arg) {
+    uint32_t* w = c->stack;
     uint32_t* top;
-    coro_self();
+    unsigned i;
     c->fn = fn;
     c->arg = arg;
-    c->stack = malloc(stack_size);
-    if (c->stack == NULL) {
-        fprintf(stderr, "coro_create: no memory for a %u byte stack\n", stack_size);
-        abort();
+    for (i = 0; i < c->stack_size / 4; i++) {
+        w[i] = STACK_FILL;
     }
-    c->stack_size = stack_size;
-    {
-        uint32_t* w = c->stack;
-        unsigned i;
-        for (i = 0; i < stack_size / 4; i++) {
-            w[i] = STACK_FILL;
-        }
-    }
-    top = (uint32_t*)(((uintptr_t)c->stack + stack_size) & ~(uintptr_t)7);
+    top = (uint32_t*)(((uintptr_t)c->stack + c->stack_size) & ~(uintptr_t)7);
     /* What coro_swap pops: d8-d15, r4-r11, then pc = coro_start. Keeps sp 8-byte aligned. */
     top -= 1;
     *top = (uint32_t)(uintptr_t)coro_start;
@@ -85,7 +76,27 @@ coro* coro_create(void (*fn)(void*), void* arg, unsigned stack_size) {
     top -= FP_BYTES / 4;
     memset(top, 0, FP_BYTES);
     c->sp = top;
+}
+
+coro* coro_create(void (*fn)(void*), void* arg, unsigned stack_size) {
+    coro* c = calloc(1, sizeof(coro));
+    coro_self();
+    if (c != NULL) {
+        c->stack = malloc(stack_size);
+    }
+    if (c == NULL || c->stack == NULL) {
+        fprintf(stderr, "coro_create: no memory for a %u byte stack\n", stack_size);
+        abort();
+    }
+    c->stack_size = stack_size;
+    start_on_stack(c, fn, arg);
     return c;
+}
+
+void coro_restart(coro* c, void (*fn)(void*), void* arg) {
+    if (c != current && c != &main_coro) {
+        start_on_stack(c, fn, arg);
+    }
 }
 
 void coro_delete(coro* c) {

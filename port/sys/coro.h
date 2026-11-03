@@ -12,6 +12,7 @@ typedef struct coro coro;
 
 coro* coro_self(void);                                  /* the running coroutine (the first call adopts the thread) */
 coro* coro_create(void (*fn)(void*), void* arg, unsigned stack_size);
+void coro_restart(coro* c, void (*fn)(void*), void* arg);   /* starts c's function again on the same stack */
 void coro_delete(coro* c);
 void coro_switch(coro* to);
 

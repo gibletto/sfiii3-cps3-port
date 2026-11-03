@@ -969,9 +969,6 @@ static void draw_shadows(void) {
             if (k == 1 && b < 2) {
                 continue;
             }
-            if (k == 0 && b >= 4) {
-                continue;
-            }
             lut_alpha(mask);
             first = list_start();
             for (i = 0; i < nshadows; i++) {

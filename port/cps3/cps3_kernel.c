@@ -205,10 +205,9 @@ static void task_start(void* arg) {
 void task_dispatch(TCB* tp) {
     s32 i = tp - task_tbl;
     s32 saved = imask;
-    /* sp at the stack top means a new task. Start a fresh coroutine. */
+    /* sp at the stack top means a new task: start it again on its stack */
     if (tp->sp == tp->stack_top) {
-        coro_delete(task_coro[i]);
-        task_coro[i] = coro_create(task_start, tp, TASK_STACK_SIZE);
+        coro_restart(task_coro[i], task_start, tp);
         tp->sp = tp->stack_top - 1;
     }
     imask = (tp->sr >> 4) & 15;
@@ -275,9 +274,14 @@ static void cpu_main(void* arg) {
     abort();
 }
 
+/* The task stacks are made here, once, and reused: on the 3DS the heap is nearly full once the game runs. */
 void cps3_boot(void) {
+    s32 i;
     host_coro = coro_self();
     cpu_coro = coro_create(cpu_main, NULL, TASK_STACK_SIZE);
+    for (i = 0; i < 8; i++) {
+        task_coro[i] = coro_create(task_start, &task_tbl[i], TASK_STACK_SIZE);
+    }
 }
 
 /* Runs one frame: the CPU until idle, two timer interrupts, then the vblank. */

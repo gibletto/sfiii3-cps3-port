@@ -2,7 +2,9 @@
 """Copies the game's data files so they are laid out in memory as on the arcade board.
 
     python port/tools/host_data.py [--big-endian] [--images <name>:<size>,...] [--src <code dir>]
-                                   <out dir> <data .c files...>
+                                   [--data <data dir>] <out dir> [<data .c files...>]
+
+--data takes every .c file in the folder, in the order CMake's file(GLOB) gives them.
 
 The game finds some data by position (a script's header is the array just before it, sound sequences are
 offsets into the arrays that follow). GCC pads larger arrays, so each array definition gets an explicit
@@ -146,6 +148,7 @@ def main():
     global LITTLE_ENDIAN
     args = sys.argv[1:]
     code = None
+    data_dir = None
     while args and args[0].startswith("--"):
         opt = args.pop(0)
         if opt == "--big-endian":
@@ -156,12 +159,19 @@ def main():
                 BYTE_IMAGES[name.strip()] = int(size)
         elif opt == "--src":
             code = args.pop(0)
+        elif opt == "--data":
+            # the data folder's .c files, in CMake's glob order: a list of them all is too long for a Windows
+            # command line once the checkout's path is long
+            data_dir = args.pop(0)
         else:
             sys.exit(f"host_data.py: unknown option {opt}")
     outdir = pathlib.Path(args[0])
     outdir.mkdir(parents=True, exist_ok=True)
+    names = args[1:]
+    if data_dir is not None:
+        names += sorted(str(p).replace("\\", "/") for p in pathlib.Path(data_dir).glob("*.c"))
     lists = []
-    for name in args[1:]:
+    for name in names:
         src = pathlib.Path(name).resolve()
         text, listed = transform(src.read_text(encoding="utf-8", errors="surrogateescape"), src)
         write(outdir / src.name, text)

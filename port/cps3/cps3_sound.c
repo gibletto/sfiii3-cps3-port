@@ -56,13 +56,15 @@ void cps3_sound_key_write(u32 k) {
 }
 
 /* On a little-endian host, sample ROM byte n is byte n in memory (unlike the graphics bytes).
-   When streaming, a voice whose page is not loaded yet stays silent until it arrives. */
+   When streaming, a voice whose page is not loaded yet plays silence until it arrives. It still moves on as on the
+   board, so it ends when it would have: the game reads the key-on bits back. */
 #define PAGE_SHIFT  (CPS3_USER5_PAGE_SHIFT + 2)     /* bytes */
 #define PAGE_WORDS  (1u << CPS3_USER5_PAGE_SHIFT)
 
+static const u32 silence[PAGE_WORDS];
+
 /* The page holding sample ROM byte a, or NULL while it loads. */
 static const u32* sample_page(u32 a) {
-    static const u32 silence[PAGE_WORDS];
     u32 page = (a - SAMPLE_BASE) >> PAGE_SHIFT;
     if (page >= CPS3_USER5_PAGES) {
         return silence;
@@ -119,8 +121,7 @@ void cps3_sound_render(s16* out, u32 n) {
                 if (off >> PAGE_SHIFT != page) {
                     mem = sample_page(start + p);
                     if (mem == NULL) {
-                        /* wait for the page */
-                        break;
+                        mem = silence;          /* still loading: asked for again at the next page or render */
                     }
                     page = off >> PAGE_SHIFT;
                 }

@@ -9,9 +9,55 @@
 
 #include "types.h"
 #include "cps3_host.h"
+#include "cps3_file.h"
 #include "cps3.h"
 
 #define EEPROM_WORDS 64
+
+/* ---- saving files (cps3_file.h) ---- */
+
+static void tmp_name(char* tmp, size_t len, const char* path) {
+    snprintf(tmp, len, "%s.tmp", path);
+}
+
+FILE* cps3_file_begin(const char* path, const char* mode) {
+    char tmp[600];
+    tmp_name(tmp, sizeof(tmp), path);
+    return fopen(tmp, mode);
+}
+
+int cps3_file_commit(FILE* f, const char* path) {
+    char tmp[600];
+    int ok = !ferror(f);
+    tmp_name(tmp, sizeof(tmp), path);
+    if (fclose(f) != 0) {
+        ok = 0;
+    }
+    /* rename doesn't replace a file on Windows or the 3DS: remove the old one first. cps3_file_recover covers the
+       moment between the two. */
+    if (ok) {
+        remove(path);
+        ok = rename(tmp, path) == 0;
+    }
+    if (!ok) {
+        remove(tmp);
+    }
+    return ok;
+}
+
+void cps3_file_recover(const char* path) {
+    char tmp[600];
+    FILE* f;
+    tmp_name(tmp, sizeof(tmp), path);
+    if ((f = fopen(path, "rb")) != NULL) {
+        fclose(f);
+        remove(tmp);                /* a save cut off while writing: the old file stands */
+    } else {
+        rename(tmp, path);          /* cut off after the old file was removed: the new one is complete */
+    }
+}
+
+/* ---- the EEPROM ---- */
 
 static u16 eeprom[EEPROM_WORDS];
 static u16 latch;
@@ -22,6 +68,7 @@ void cps3_eeprom_load(const char* path) {
     u8 b[EEPROM_WORDS * 2];
     s32 i;
     snprintf(eeprom_path, sizeof(eeprom_path), "%s", path);
+    cps3_file_recover(path);
     f = fopen(path, "rb");
     if (f == NULL) {
         return;
@@ -69,10 +116,10 @@ static void save(void) {
         b[i * 2] = eeprom[i] >> 8;
         b[i * 2 + 1] = (u8)eeprom[i];
     }
-    f = fopen(eeprom_path, "wb");
+    f = cps3_file_begin(eeprom_path, "wb");
     if (f != NULL) {
         fwrite(b, 1, sizeof(b), f);
-        fclose(f);
+        cps3_file_commit(f, eeprom_path);
     }
 }
 

@@ -12,6 +12,7 @@ struct coro {
     void (*fn)(void*);
     void* arg;
     int owns_fiber;
+    unsigned stack_size;
 };
 
 static coro* current;
@@ -35,9 +36,20 @@ coro* coro_create(void (*fn)(void*), void* arg, unsigned stack_size) {
     coro_self();
     c->fn = fn;
     c->arg = arg;
+    c->stack_size = stack_size;
     c->fiber = CreateFiber(stack_size, fiber_entry, c);
     c->owns_fiber = 1;
     return c;
+}
+
+/* a fiber can't be rewound: make a new one (the PC has the memory) */
+void coro_restart(coro* c, void (*fn)(void*), void* arg) {
+    if (c != current && c->owns_fiber) {
+        DeleteFiber(c->fiber);
+        c->fn = fn;
+        c->arg = arg;
+        c->fiber = CreateFiber(c->stack_size, fiber_entry, c);
+    }
 }
 
 void coro_delete(coro* c) {

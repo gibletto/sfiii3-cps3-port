@@ -185,24 +185,45 @@ static void sound_open(void) {
     }
 }
 
+/* stretches n stereo samples to m (linear) into stretch_buf */
+static s16 stretch_buf[2 * 2200];
+
+static void stretch(const s16* in, u32 n, u32 m) {
+    u32 i;
+    for (i = 0; i < m; i++) {
+        u32 at = (u32)(((Uint64)i * (n - 1) << 16) / (m > 1 ? m - 1 : 1));
+        u32 k = at >> 16, f = at & 0xFFFF;
+        u32 k1 = k + 1 < n ? k + 1 : k;
+        stretch_buf[i * 2] = (s16)(in[k * 2] + (((s32)in[k1 * 2] - in[k * 2]) * (s32)f >> 16));
+        stretch_buf[i * 2 + 1] = (s16)(in[k * 2 + 1] + (((s32)in[k1 * 2 + 1] - in[k * 2 + 1]) * (s32)f >> 16));
+    }
+}
+
+/* Each frame renders the board's samples for a frame: the game reads the voices' state back, so the count must
+   not depend on the sound device. The device's clock drifts from the frame rate, so to keep 2-6 frames queued
+   the samples are stretched a little (under 1%) on the way out, or a frame of silence goes ahead after a stall. */
 static void sound_frame(void) {
     u32 n;
-    sound_acc += CPS3_SOUND_RATE / FRAME_HZ;
+    sound_acc += CPS3_SOUND_RATE / CPS3_FRAME_HZ;
     n = (u32)sound_acc;
     sound_acc -= n;
-    if (audio_dev != 0) {
-        /* the device's clock drifts from the frame rate: adjust a little to keep 2-6 frames queued */
-        u32 queued = (u32)(SDL_GetQueuedAudioSize(audio_dev) / 4 / audio_ratio);
-        u32 per = (u32)(CPS3_SOUND_RATE / FRAME_HZ);
-        if (queued > per * 6) {
-            n -= n / 32;
-        } else if (queued < per * 2) {
-            n += n / 32;
-        }
-    }
     cps3_sound_render(sound_buf, n);
     if (audio_dev != 0) {
-        sound_queue(sound_buf, n);
+        u32 queued = (u32)(SDL_GetQueuedAudioSize(audio_dev) / 4 / audio_ratio);
+        u32 per = (u32)(CPS3_SOUND_RATE / CPS3_FRAME_HZ);
+        if (queued < per) {
+            memset(stretch_buf, 0, per * 4);
+            sound_queue(stretch_buf, per);
+        }
+        if (queued > per * 6) {
+            stretch(sound_buf, n, n - n / 128);
+            sound_queue(stretch_buf, n - n / 128);
+        } else if (queued < per * 2) {
+            stretch(sound_buf, n, n + n / 128);
+            sound_queue(stretch_buf, n + n / 128);
+        } else {
+            sound_queue(sound_buf, n);
+        }
     }
 }
 

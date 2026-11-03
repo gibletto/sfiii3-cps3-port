@@ -44,6 +44,7 @@ static u32* user5_slot_page;
 static u32* user5_free;             /* slots never used, taken from the end */
 static u32 user5_nfree;
 static u8* user5_slot_busy;         /* held for the background fill */
+static u32 user5_nbusy;
 u32 cps3_user5_misses;              /* pages read for the game on the spot */
 static u32 user5_hand;
 static u32 user5_reserve;
@@ -118,14 +119,16 @@ u32* cps3_user5_fault(u32 page) {
     return mem;
 }
 
-/* Background fill: a slot never used, held until cps3_user5_fill; -1 when there is none left */
+/* Background fill: a slot never used, held until cps3_user5_fill; -1 when there is none left. One slot is
+   never held, so claim_slot always finds one. */
 s32 cps3_user5_spare_slot(void) {
     u32 slot;
-    if (user5_nfree == 0) {
+    if (user5_nfree == 0 || user5_nbusy + 1 >= user5_slots) {
         return -1;
     }
     slot = user5_free[--user5_nfree];
     user5_slot_busy[slot] = 1;
+    user5_nbusy++;
     return (s32)slot;
 }
 
@@ -136,6 +139,7 @@ u32* cps3_user5_slot_mem(u32 slot) {
 /* the held slot now holds the page; if the game loaded the page meanwhile, the slot goes back */
 void cps3_user5_fill(u32 slot, u32 page) {
     user5_slot_busy[slot] = 0;
+    user5_nbusy--;
     if (page >= CPS3_USER5_PAGES || cps3_user5_page[page] != NULL) {
         user5_free[user5_nfree++] = slot;
         return;
@@ -379,7 +383,7 @@ static CharGfxSet* convert_set(const u8* rom, u32 rom_size, u32 addr) {
     set->cells = cells;
     set->prep = be32(p + 8);
     p += 12;
-    for (i = 0; i < count; i++, p += 8) {
+    for (i = 0; i < count && (u32)(p - rom) + 8 <= rom_size; i++, p += 8) {
         set->chunk[i].src = be32(p);
         set->chunk[i].size = be16(p + 4);
         set->chunk[i].dst = be16(p + 6);

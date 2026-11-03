@@ -18,8 +18,13 @@ u32 cps3_low_read_be(u32 addr, u32 size, const char* site);
 #define HOST_NULL_STR2(x) #x
 #define HOST_NULL_STR(x) HOST_NULL_STR2(x)
 #define NULL_READ(p, field)                                                                                     \
-    ((p) ? (p)->field                                                                                           \
-         : (__typeof__((p)->field))cps3_low_read_be(offsetof(__typeof__(*(p)), field), sizeof((p)->field),       \
-                                                    __FILE_NAME__ ":" HOST_NULL_STR(__LINE__) " " #p "->" #field))
+    __extension__({                                                                                             \
+        __typeof__(p) null_read_p = (p);                                                                        \
+        null_read_p ? null_read_p->field                                                                        \
+                    : (__typeof__((p)->field))cps3_low_read_be(offsetof(__typeof__(*(p)), field),                \
+                                                               sizeof((p)->field),                               \
+                                                               __FILE_NAME__ ":" HOST_NULL_STR(__LINE__) " " #p  \
+                                                               "->" #field);                                     \
+    })
 
 #endif
