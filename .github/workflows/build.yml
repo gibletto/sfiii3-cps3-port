@@ -14,7 +14,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  3ds:
+  ctr:
+    name: 3DS
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     container:
@@ -36,6 +37,7 @@ jobs:
           ninja -C build-3ds sf3
 
   pc:
+    name: Windows
     runs-on: windows-2025
     timeout-minutes: 30
     defaults:
