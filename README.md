@@ -102,7 +102,7 @@ title screen says NO CD and the test menu has no GAME REWRITE.
 
 A region with other default settings resets the operator settings to that region's, as on the arcade.
 
-## Screen (3DS)
+## Screen
 
 The CPS3 drew its 384x224 picture for a 4:3 monitor, so its pixels were narrower than they are tall (7/9 as
 wide). SELECT + R, then UP and DOWN choose how the 3DS shows them, and START saves it (setting the buttons saves
@@ -114,6 +114,17 @@ it too):
 - 4:3 pixels, full height: the same, also scaled to the screen's height: 320x240, softer.
 
 It is the `SCREEN` line at the end of `sdmc:/sf3/controls.ini`: `SQUARE`, `4:3` or `4:3 FULL`.
+
+On PC, `SCREEN` (`SQUARE` or `4:3`) and `SCALE` in `settings.ini` choose the shape and the size in the
+window:
+
+- `INTEGER` (the default): the height a whole multiple of the game's, as big as fits, so lines stay sharp.
+- `PERFECT`: whole multiples both ways, so every pixel is the same size. With `4:3` it is the nearest
+  whole-number shape: 3x4 at 1080p, 4x5 at 1440p.
+- `FIT`: as big as the window allows.
+
+A size that isn't a whole multiple is scaled "sharp bilinear", so only the pixels' edges blend. On a 4K screen
+`SCREEN = 4:3` with `INTEGER` or `PERFECT` is exactly 7x9: the arcade's shape with no filtering at all.
 
 ## Layout
 

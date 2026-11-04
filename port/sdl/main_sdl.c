@@ -5,7 +5,8 @@
  *
  * The ROM set is MAME's sfiii3nr1.zip, read as it is (cps3_romset.c). With no argument it is looked for in the
  * roms folder next to sf3.exe, then in rom-data folders (bios.bin, cg.bin and user5.bin, as the 3DS unpacks
- * them). The settings EEPROM is saved next to the ROM set, with settings.ini (the region, cps3_region.c).
+ * them). The settings EEPROM is saved next to the ROM set, with settings.ini (the region, cps3_region.c, and the
+ * picture's shape and size, SCREEN and SCALE).
  *
  * Runs the board at its 59.59 Hz frame rate with the software renderer. Alt+Enter or F11 toggles full screen,
  * F12 saves frame.bmp, Escape quits.
@@ -31,7 +32,6 @@
 #include "cps3_region.h"
 #include "cps3_romset.h"
 
-#define SCALE 3
 #define FRAME_HZ (42954545.0 / 6.0 / 455.0 / 264.0)
 
 static u32 frame[CPS3_VIDEO_MAX_H][CPS3_VIDEO_MAX_W];
@@ -303,12 +303,114 @@ static int load_game(const char* arg, char* save_dir, size_t len) {
     return 1;
 }
 
-/* settings.ini, next to the EEPROM: the region. Written the first time, as the 3DS writes its controls.ini */
+/* ---- the picture: its shape (settings.ini SCREEN) and size in the window (SCALE) ----
+ *
+ * SQUARE shows the game's pixels square. 4:3 gives them the shape a 4:3 arcade monitor did: 384x224 filled its
+ * screen, so a pixel is 7/9 as wide as it is tall.
+ *   INTEGER  the height a whole multiple of the game's, as big as fits: lines stay sharp
+ *   PERFECT  whole multiples both ways, so every pixel is the same; for 4:3 the nearest whole-number shape
+ *            within 5% (3x4 at 1080p, 4x5 at 1440p, exactly 7x9 at 4K), or as INTEGER if none fits
+ *   FIT      as big as the window allows
+ * A size that isn't a whole multiple is drawn "sharp bilinear": scaled up by whole numbers (nearest) into
+ * `big`, then smoothed to the size, so only the pixels' edges blend.
+ */
+
+enum { SHAPE_SQUARE, SHAPE_43 };
+enum { SCALE_INTEGER, SCALE_PERFECT, SCALE_FIT };
+
+static const char* const shape_names[] = { "SQUARE", "4:3" };
+static const char* const scale_names[] = { "INTEGER", "PERFECT", "FIT" };
+static int shape = SHAPE_SQUARE;
+static int scale_mode = SCALE_INTEGER;
+
+/* the width of a w-pixel line n lines tall */
+static s32 shaped_width(s32 w, s32 n) {
+    return shape == SHAPE_43 ? (w * n * 7 + 4) / 9 : w * n;
+}
+
+/* where a w x h frame goes in an ow x oh window */
+static void place(s32 w, s32 h, s32 ow, s32 oh, SDL_Rect* r) {
+    s32 n, b;
+    r->w = r->h = 0;
+    if (scale_mode == SCALE_PERFECT && shape == SHAPE_43) {
+        for (b = oh / h; b >= 1 && r->w == 0; b--) {
+            s32 a = (b * 7 + 4) / 9;
+            double err = (double)a * 9 / ((double)b * 7) - 1.0;
+            if (a >= 1 && a * w <= ow && err <= 0.05 && err >= -0.05) {
+                r->w = a * w;
+                r->h = b * h;
+            }
+        }
+    }
+    if (r->w == 0 && scale_mode != SCALE_FIT) {
+        for (n = oh / h; n >= 1 && shaped_width(w, n) > ow; n--) {
+        }
+        if (n >= 1) {
+            r->w = shaped_width(w, n);
+            r->h = n * h;
+        }
+    }
+    if (r->w == 0) {        /* FIT, or a window smaller than the game */
+        double aspect = (double)w * (shape == SHAPE_43 ? 7.0 / 9.0 : 1.0) / h;
+        r->h = oh;
+        r->w = (s32)(oh * aspect + 0.5);
+        if (r->w > ow) {
+            r->w = ow;
+            r->h = (s32)(ow / aspect + 0.5);
+        }
+    }
+    r->x = (ow - r->w) / 2;
+    r->y = (oh - r->h) / 2;
+}
+
+static SDL_Texture* big;
+static s32 big_w, big_h;
+
+/* draws the w x h frame in `tex` into the window */
+static void draw_picture(SDL_Renderer* ren, SDL_Texture* tex, s32 w, s32 h) {
+    SDL_Rect src, dst;
+    s32 ow, oh, px, py;
+    src.x = 0;
+    src.y = 0;
+    src.w = w;
+    src.h = h;
+    SDL_GetRendererOutputSize(ren, &ow, &oh);
+    place(w, h, ow, oh, &dst);
+    SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
+    SDL_RenderClear(ren);
+    if (dst.w % w == 0 && dst.h % h == 0) {
+        SDL_RenderCopy(ren, tex, &src, &dst);       /* whole multiples: nearest is exact */
+        return;
+    }
+    px = (dst.w + w - 1) / w;
+    py = (dst.h + h - 1) / h;
+    if (big == NULL || big_w != w * px || big_h != h * py) {
+        if (big != NULL) {
+            SDL_DestroyTexture(big);
+        }
+        big = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, w * px, h * py);
+        big_w = w * px;
+        big_h = h * py;
+        if (big != NULL) {
+            SDL_SetTextureScaleMode(big, SDL_ScaleModeLinear);
+        }
+    }
+    if (big == NULL || SDL_SetRenderTarget(ren, big) != 0) {
+        SDL_RenderCopy(ren, tex, &src, &dst);       /* no render targets: plain nearest */
+        return;
+    }
+    SDL_RenderCopy(ren, tex, &src, NULL);
+    SDL_SetRenderTarget(ren, NULL);
+    SDL_RenderCopy(ren, big, NULL, &dst);
+}
+
+/* settings.ini, next to the EEPROM: the region, SCREEN and SCALE. The lines it lacks are added, as the 3DS adds
+   them to its controls.ini */
 static void load_settings(const char* dir) {
     char path[600];
     char line[256];
     int region = CPS3_REGION_BIOS;
-    int found = 0;
+    int found = 0, have_screen = 0, have_scale = 0, full = 0;
     FILE* f;
     snprintf(path, sizeof(path), "%s/settings.ini", dir);
     if ((f = fopen(path, "r")) != NULL) {
@@ -324,16 +426,50 @@ static void load_settings(const char* dir) {
             if (key != NULL && strcasecmp(key, "REGION") == 0) {
                 region = cps3_region_find(eq + 1) >= 0 ? cps3_region_find(eq + 1) : CPS3_REGION_BIOS;
                 found = 1;
+            } else if (key != NULL && strcasecmp(key, "SCREEN") == 0) {
+                char* v = strtok(eq + 1, " \t");
+                have_screen = 1;
+                shape = v != NULL && strcmp(v, "4:3") == 0 ? SHAPE_43 : SHAPE_SQUARE;
+                v = strtok(NULL, " \t");
+                full = shape == SHAPE_43 && v != NULL && strcasecmp(v, "FULL") == 0;   /* the 3DS's: as FIT */
+            } else if (key != NULL && strcasecmp(key, "SCALE") == 0) {
+                char* v = strtok(eq + 1, " \t");
+                have_scale = 1;
+                scale_mode = SCALE_INTEGER;
+                if (v != NULL && strcasecmp(v, "PERFECT") == 0) {
+                    scale_mode = SCALE_PERFECT;
+                } else if (v != NULL && strcasecmp(v, "FIT") == 0) {
+                    scale_mode = SCALE_FIT;
+                }
             }
         }
         fclose(f);
     }
-    if (!found && (f = fopen(path, "a")) != NULL) {
+    if (full && !have_scale) {
+        scale_mode = SCALE_FIT;
+    }
+    if ((!found || !have_screen || !have_scale) && (f = fopen(path, "a")) != NULL) {
         fseek(f, 0, SEEK_END);
         if (ftell(f) == 0) {
             fputs("; " TITLE ": settings\n\n", f);
         }
-        cps3_region_write(f, region);
+        if (!found) {
+            cps3_region_write(f, region);
+        }
+        if (!have_screen || !have_scale) {
+            fputs("\n; SCREEN: SQUARE shows the game's pixels square. 4:3 gives them the shape a 4:3 arcade monitor did,\n"
+                  "; so the picture is narrower.\n"
+                  "; SCALE: INTEGER makes the height a whole multiple of the game's, so lines stay sharp. PERFECT makes\n"
+                  "; every pixel the same size (with 4:3, a shape within 5% of it; exact on a 4K screen). FIT fills\n"
+                  "; the window.\n",
+                  f);
+        }
+        if (!have_screen) {
+            fprintf(f, "SCREEN = %s\n", shape_names[shape]);
+        }
+        if (!have_scale) {
+            fprintf(f, "SCALE = %s\n", scale_names[scale_mode]);
+        }
         fclose(f);
     }
     cps3_region_apply(region);
@@ -354,6 +490,8 @@ int main(int argc, char** argv) {
     Uint64 freq, next;
     s32 w = 384, h = 224;
     s32 running = 1;
+    s32 n;
+    SDL_DisplayMode desk;
 
     host_divzero_install();
     if (!load_game(argc > 1 ? argv[1] : NULL, dir, sizeof(dir))) {
@@ -363,16 +501,26 @@ int main(int argc, char** argv) {
     snprintf(path, sizeof(path), "%s/eeprom.bin", dir);
     cps3_eeprom_load(path);
 
+    /* the window in real pixels: with Windows' display scaling stretching it, no size would be a whole multiple */
+    SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS, "permonitorv2");
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_GAMECONTROLLER) != 0) {
         fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
         return 1;
     }
-    win = SDL_CreateWindow(TITLE, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                           384 * SCALE, 224 * SCALE, SDL_WINDOW_RESIZABLE);
-    ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED);
+    /* the window starts a whole multiple of the game's height, about 3/4 of the screen's */
+    n = SDL_GetDesktopDisplayMode(0, &desk) == 0 ? desk.h * 3 / 4 / 224 : 3;
+    if (n < 1) {
+        n = 1;
+    }
+    win = SDL_CreateWindow(TITLE, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, shaped_width(384, n), 224 * n,
+                           SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
+    ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_TARGETTEXTURE);
+    if (ren == NULL) {
+        ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED);
+    }
     tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, CPS3_VIDEO_MAX_W,
                             CPS3_VIDEO_MAX_H);
-    SDL_RenderSetLogicalSize(ren, 384, 224);
+    SDL_SetTextureScaleMode(tex, SDL_ScaleModeNearest);
 
     open_pads();
     sound_open();
@@ -381,7 +529,6 @@ int main(int argc, char** argv) {
     next = SDL_GetPerformanceCounter();
     while (running) {
         SDL_Event e;
-        SDL_Rect src;
         while (SDL_PollEvent(&e)) {
             if (e.type == SDL_QUIT || (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_ESCAPE)) {
                 running = 0;
@@ -401,13 +548,7 @@ int main(int argc, char** argv) {
         cps3_video_render(&frame[0][0], CPS3_VIDEO_MAX_W);
         cps3_video_size(&w, &h);
         SDL_UpdateTexture(tex, NULL, frame, CPS3_VIDEO_MAX_W * 4);
-        src.x = 0;
-        src.y = 0;
-        src.w = w;
-        src.h = h;
-        SDL_RenderSetLogicalSize(ren, w, h);
-        SDL_RenderClear(ren);
-        SDL_RenderCopy(ren, tex, &src, NULL);
+        draw_picture(ren, tex, w, h);
         SDL_RenderPresent(ren);
 
         next += (Uint64)(freq / FRAME_HZ);
@@ -423,6 +564,9 @@ int main(int argc, char** argv) {
     if (audio_dev != 0) {
         SDL_CloseAudioDevice(audio_dev);
         SDL_FreeAudioStream(audio_conv);
+    }
+    if (big != NULL) {
+        SDL_DestroyTexture(big);
     }
     SDL_DestroyTexture(tex);
     SDL_DestroyRenderer(ren);
