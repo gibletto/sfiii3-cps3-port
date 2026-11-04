@@ -4,7 +4,8 @@
  * The mapping is kept in sdmc:/sf3/controls.ini, one line per button: "ZL = LP MP HP". The file is written with
  * the default buttons the first time the game runs. It also holds the region ("REGION = USA", cps3_region.c).
  * SELECT + R opens the setup screen, which asks for a button for each attack, like an arcade cabinet's button
- * check, and saves the file; LEFT and RIGHT change the region there, and START saves just the region.
+ * check, and saves the file; LEFT and RIGHT change the region there, UP and DOWN the pixels' shape (SCREEN), and
+ * START saves just those.
  *
  * The D-pad and Circle Pad always move, and SELECT is always the coin and menu button.
  */
@@ -20,6 +21,7 @@
 #include "cps3_file.h"
 #include "cps3_region.h"
 #include "ctr_controls.h"
+#include "ctr_video.h"
 
 #define PUNCHES     (CPS3_IN_LP | CPS3_IN_MP | CPS3_IN_HP)
 #define KICKS       (CPS3_IN_LK | CPS3_IN_MK | CPS3_IN_HK)
@@ -50,7 +52,7 @@ static const u32 defaults[NBUTTONS] = {
 };
 
 static const char header[] =
-    "; Street Fighter III 3rd Strike: the 3DS buttons and the region (at the end)\n"
+    "; Street Fighter III 3rd Strike: the 3DS buttons, the region and the screen (at the end)\n"
     ";\n"
     "; Each line is a button and what it does in the game:\n"
     ";   LP MP HP   light, medium and heavy punch\n"
@@ -59,11 +61,27 @@ static const char header[] =
     "; A button can do several at once: \"ZL = LP MP HP\" presses all three punches.\n"
     "; \"none\" turns a button off. The buttons are Y X L B A R ZL ZR START (ZL and ZR are on the New 3DS).\n"
     "; The D-pad and Circle Pad always move, and SELECT is always the coin and menu button.\n"
-    "; In the game, hold SELECT and press R to set the buttons and the region on screen instead.\n"
+    "; In the game, hold SELECT and press R to set the buttons, the region and the screen on screen instead.\n"
+    ";\n"
+    "; SCREEN = SQUARE shows the game's pixels square, as sharp as they come. SCREEN = 4:3 gives them the shape\n"
+    "; a 4:3 arcade monitor did: the picture is narrower, as on the arcade, and a little softer.\n"
+    "; SCREEN = 4:3 FULL does the same and fills the screen's height too, softer still.\n"
     "\n";
 
 static u32 map[NBUTTONS];
 static int region = CPS3_REGION_BIOS;
+static int screen;              /* SCREEN: the pixels' shape, CTR_SHAPE_* (ctr_video.c) */
+static int shape;               /* the shape shown: `screen`, or the setup screen's choice while it is open */
+
+static const struct {
+    const char* name;           /* in the file */
+    const char* label;          /* on the setup screen */
+    const char* text;
+} shapes[CTR_SHAPES] = {
+    { "SQUARE", "Square pixels", "sharp" },
+    { "4:3", "4:3 pixels", "arcade shape, softer" },
+    { "4:3 FULL", "4:3 pixels, full height", "fills the height, softer" },
+};
 
 static int find_button(const char* s) {
     int i;
@@ -107,6 +125,15 @@ static int parse(FILE* f, int* has_region) {
             *has_region = 1;
             continue;
         }
+        if (tok != NULL && strcasecmp(tok, "SCREEN") == 0) {
+            screen = CTR_SHAPE_SQUARE;
+            tok = strtok(eq + 1, " \t");
+            if (tok != NULL && strcmp(tok, "4:3") == 0) {
+                tok = strtok(NULL, " \t");
+                screen = tok != NULL && strcasecmp(tok, "FULL") == 0 ? CTR_SHAPE_43_FULL : CTR_SHAPE_43;
+            }
+            continue;
+        }
         if (tok == NULL || (b = find_button(tok)) < 0) {
             continue;
         }
@@ -144,6 +171,7 @@ static int save(void) {
     }
     fputc('\n', f);
     cps3_region_write(f, region);
+    fprintf(f, "\nSCREEN = %s\n", shapes[screen].name);
     return cps3_file_commit(f, CTR_CONTROLS_FILE);
 }
 
@@ -161,6 +189,7 @@ void ctr_controls_load(void) {
         memcpy(map, defaults, sizeof(map));
     }
     fclose(f);
+    shape = screen;
     if (!has_region) {
         save();     /* a file from before the region setting: add its line */
     }
@@ -168,6 +197,10 @@ void ctr_controls_load(void) {
 
 int ctr_controls_region(void) {
     return region;
+}
+
+int ctr_controls_shape(void) {
+    return shape;
 }
 
 u32 ctr_controls_map(u32 held) {
@@ -218,11 +251,13 @@ static void draw(void) {
     }
     printf("\n   Region  \x1b[36m< %s >\x1b[0m\n           %s text\n", cps3_region_label(choice),
            cps3_region_text(choice));
+    printf("\n   Screen  \x1b[36m^ %s v\x1b[0m\n           %s\n", shapes[shape].label, shapes[shape].text);
     if (phase == DONE) {
         printf("\n %s\n", result);
     } else {
-        printf("\n LEFT/RIGHT  change the region\n SELECT      no button for this one\n"
-               " START       keep the old buttons\n             (saves the region)\n");
+        printf("\n LEFT/RIGHT  change the region\n UP/DOWN     change the screen\n"
+               " SELECT      no button for this one\n"
+               " START       keep the old buttons\n             (saves the region and screen)\n");
     }
 }
 
@@ -234,14 +269,17 @@ void ctr_controls_setup_begin(void) {
     phase = RELEASE;
     step = 0;
     choice = region;
+    shape = screen;
     draw();
 }
 
 /* saves the file (the buttons and the region chosen) and shows what happened */
 static void finish(int buttons_set) {
     int region_set = choice != region;
+    int shape_set = shape != screen;
     region = choice;
-    if (!buttons_set && !region_set) {
+    screen = shape;
+    if (!buttons_set && !region_set && !shape_set) {
         snprintf(result, sizeof(result), "Cancelled: nothing changed.");
     } else if (!save()) {
         snprintf(result, sizeof(result), "Could not save " CTR_CONTROLS_FILE ",\n but the buttons are set until you quit.");
@@ -271,6 +309,11 @@ int ctr_controls_setup_frame(void) {
         }
         if (down & (KEY_LEFT | KEY_RIGHT)) {
             choice = (choice + (down & KEY_LEFT ? cps3_region_count() - 1 : 1)) % cps3_region_count();
+            draw();
+            return 1;
+        }
+        if (down & (KEY_UP | KEY_DOWN)) {
+            shape = (shape + (down & KEY_UP ? CTR_SHAPES - 1 : 1)) % CTR_SHAPES;   /* shown at once (main_3ds.c) */
             draw();
             return 1;
         }

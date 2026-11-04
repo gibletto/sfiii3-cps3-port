@@ -37,6 +37,8 @@
 
 #define RT_W        1024        /* the render target holds the board's 1024x448 line buffer */
 #define RT_H        512
+#define WIDE_W      512         /* holds a widescreen frame, 496x224 */
+#define WIDE_H      256
 #define RB_W        1024
 #define RB_H        448
 #define BANK_DIM    1024        /* a character bank texture */
@@ -88,7 +90,12 @@ static C3D_Tex fg_tex;
 static DVLB_s* dvlb;
 static shaderProgram_s prog;
 static s8 u_proj;
-static C3D_Mtx proj_rt, proj_top;
+static C3D_Mtx proj_rt, proj_top, proj_wide;
+/* a frame shown at another size (widescreen, or the arcade shape) is put together here at its own size, then
+   scaled onto the screen */
+static C3D_Tex wide_tex;
+static C3D_RenderTarget* wide;
+static int shape;                   /* the pixels' shape, CTR_SHAPE_* */
 static C3D_LightEnv env;
 static C3D_Light light;
 static C3D_LightLut env_lut;
@@ -1192,14 +1199,54 @@ static void flush_quads(void) {
     GSPGPU_FlushDataCache(idx, nidx * sizeof(u16));
 }
 
+int ctr_video_set_shape(int s) {
+    if (s < 0 || s >= CTR_SHAPES) {
+        s = CTR_SHAPE_SQUARE;
+    }
+    if (s == shape) {
+        return 0;
+    }
+    shape = s;
+    return 1;
+}
+
+/* Where a w x h frame goes on the 400x240 screen.
+   Square pixels: as it is, or scaled to the screen's width if it is wider.
+   4:3 pixels: the shape a 4:3 arcade monitor gave them. 384x224 filled its screen, so a pixel is 7/9 as wide as it
+   is tall. Only the width is scaled, so lines stay sharp: 384x224 is shown 299x224, widescreen's 495x224 385x224.
+   Full height also scales it to the screen's height, as far as the width allows: 320x240, and 400x233. */
+static void place(s32 w, s32 h, s32* dx, s32* dy, s32* dw, s32* dh) {
+    *dw = w;
+    *dh = h;
+    if (w <= 0 || h <= 0) {
+        return;
+    }
+    if (shape != CTR_SHAPE_SQUARE) {
+        if (shape == CTR_SHAPE_43_FULL) {
+            *dh = 240;
+        }
+        *dw = (*dh * w * 7 + h * 9 / 2) / (h * 9);
+        if (*dw > 400) {
+            *dw = 400;
+            *dh = (400 * h * 9 + w * 7 / 2) / (w * 7);
+        }
+    } else if (w > 400) {
+        *dw = 400;
+        *dh = (h * 400 + w / 2) / w;
+    }
+    *dx = (400 - *dw) / 2;
+    *dy = (240 - *dh) / 2;
+}
+
 void ctr_video_render(void) {
     u32 zx = VREG(0x6C) & 0xFF;
     u32 zy = VREG(0x7C) & 0xFF;
     u32 fszx, fszy;
-    s32 w, h, ox, oy;
+    s32 w, h, ox, oy, dx, dy, dw, dh;
     CLIP rclip;
     u32 first;
     s32 eye;
+    int scaled;
     float su, sv, u0, v0;
 
     /* Wait for the vertical blank on both screens (as C3D_FrameSync does), running queued character DMA in
@@ -1267,8 +1314,11 @@ void ctr_video_render(void) {
 
     /* index lists: sprites by palette, then the text layer */
     sort_opaque();
-    ox = (400 - w) / 2;
-    oy = (240 - h) / 2;
+    /* shown at another size: put together at its own size in `wide`, then scaled onto the screen */
+    place(w, h, &dx, &dy, &dw, &dh);
+    scaled = wide != NULL && w <= WIDE_W && h <= WIDE_H && (dw != w || dh != h);
+    ox = scaled ? 0 : (400 - w) / 2;
+    oy = scaled ? 0 : (240 - h) / 2;
     if (ox < 0) {
         ox = 0;
     }
@@ -1311,10 +1361,20 @@ void ctr_video_render(void) {
             }
         }
 
-        /* the top screen: the line buffer zoomed, then the text layer */
-        C3D_RenderTargetClear(screen, C3D_CLEAR_COLOR, 0x000000FF, 0);
-        C3D_FrameDrawOn(screen);
-        C3D_FVUnifMtx4x4(GPU_GEOMETRY_SHADER, u_proj, &proj_top);
+        /* the top screen (or the widescreen frame): the line buffer zoomed, then the text layer */
+        if (scaled) {
+            if (eye && !walk_deep) {
+                flush_quads();
+                C3D_FrameSplit(0);      /* the left eye's frame must be on the screen before the clear */
+            }
+            C3D_RenderTargetClear(wide, C3D_CLEAR_COLOR, 0x000000FF, 0);
+            C3D_FrameDrawOn(wide);
+            C3D_FVUnifMtx4x4(GPU_GEOMETRY_SHADER, u_proj, &proj_wide);
+        } else {
+            C3D_RenderTargetClear(screen, C3D_CLEAR_COLOR, 0x000000FF, 0);
+            C3D_FrameDrawOn(screen);
+            C3D_FVUnifMtx4x4(GPU_GEOMETRY_SHADER, u_proj, &proj_top);
+        }
         C3D_FVUnifSet(GPU_GEOMETRY_SHADER, u_eye, shift, 0.0f, 0.0f, 0.0f);
         C3D_LightEnvBind(NULL);
         C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
@@ -1334,6 +1394,21 @@ void ctr_video_render(void) {
         state_flush();
         lut_alpha(0);
         draw_fg();
+
+        if (scaled) {
+            /* the frame scaled to its place, between black bars */
+            C3D_RenderTargetClear(screen, C3D_CLEAR_COLOR, 0x000000FF, 0);
+            C3D_FrameDrawOn(screen);
+            C3D_FVUnifMtx4x4(GPU_GEOMETRY_SHADER, u_proj, &proj_top);
+            C3D_FVUnifSet(GPU_GEOMETRY_SHADER, u_eye, 0.0f, 0.0f, 0.0f, 0.0f);   /* already shifted */
+            C3D_LightEnvBind(NULL);
+            C3D_AlphaTest(false, GPU_ALWAYS, 0);
+            texenv_texture();
+            C3D_TexBind(0, &wide_tex);
+            first = list_start();
+            put_quad(dx, dy, dx + dw, dy + dh, 0.0f, 1.0f, (float)w / WIDE_W, 1.0f - (float)h / WIDE_H, 0);
+            flush_from(&first);
+        }
     }
 
     flush_quads();
@@ -1395,6 +1470,14 @@ int ctr_video_init(void) {
     if (top == NULL || rt == NULL) {
         return 0;
     }
+    /* widescreen frames; a render target has to be in VRAM. Without it they are cut at the screen's edge */
+    if (C3D_TexInitVRAM(&wide_tex, WIDE_W, WIDE_H, GPU_RGBA8)) {
+        C3D_TexSetFilter(&wide_tex, GPU_LINEAR, GPU_LINEAR);
+        wide = C3D_RenderTargetCreateFromTex(&wide_tex, GPU_TEXFACE_2D, 0, -1);
+        if (wide == NULL) {
+            C3D_TexDelete(&wide_tex);
+        }
+    }
     /* the right eye, if VRAM allows; a frame that draws only the left eye is shown to both */
     top_right = C3D_RenderTargetCreate(240, 400, GPU_RB_RGBA8, -1);
     if (top_right != NULL) {
@@ -1431,6 +1514,7 @@ int ctr_video_init(void) {
     u_eye = shaderInstanceGetUniformLocation(prog.geometryShader, "eye");
     Mtx_Ortho(&proj_rt, 0.0f, RT_W, RT_H, 0.0f, 0.0f, Z_BASE + 1, true);
     Mtx_OrthoTilt(&proj_top, 0.0f, 400.0f, 240.0f, 0.0f, 0.0f, Z_BASE + 1, true);
+    Mtx_Ortho(&proj_wide, 0.0f, WIDE_W, WIDE_H, 0.0f, 0.0f, Z_BASE + 1, true);
 
     attr = C3D_GetAttrInfo();
     AttrInfo_Init(attr);
@@ -1464,6 +1548,10 @@ void ctr_video_exit(void) {
         C3D_TexDelete(&bank_tex[i]);
     }
     C3D_TexDelete(&fg_tex);
+    if (wide != NULL) {
+        C3D_RenderTargetDelete(wide);
+        C3D_TexDelete(&wide_tex);
+    }
     C3D_RenderTargetDelete(rt);
     C3D_RenderTargetDelete(top);
     if (top_right != NULL) {

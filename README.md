@@ -69,7 +69,7 @@ up the SD card.
 | SELECT | insert a coin |
 | SELECT + START | operator (test) menu: settings, free play, difficulty and so on |
 | SELECT + L | service coin (a free credit) |
-| SELECT + R | button and region setup |
+| SELECT + R | button, region and screen setup |
 | SELECT + B | quit |
 
 The attack buttons can be changed. SELECT + R opens a setup screen on the bottom screen that asks for a button
@@ -101,6 +101,19 @@ Each region also has a NO CD version, for example `ASIA (NO CD)`, as on boards w
 title screen says NO CD and the test menu has no GAME REWRITE.
 
 A region with other default settings resets the operator settings to that region's, as on the arcade.
+
+## Screen (3DS)
+
+The CPS3 drew its 384x224 picture for a 4:3 monitor, so its pixels were narrower than they are tall (7/9 as
+wide). SELECT + R, then UP and DOWN choose how the 3DS shows them, and START saves it (setting the buttons saves
+it too):
+
+- Square pixels (the default): the pixels as they are, sharp.
+- 4:3 pixels: the shape the arcade monitor gave them. Only the width is scaled, so the picture is narrower,
+  299x224, and a little softer.
+- 4:3 pixels, full height: the same, also scaled to the screen's height: 320x240, softer.
+
+It is the `SCREEN` line at the end of `sdmc:/sf3/controls.ini`: `SQUARE`, `4:3` or `4:3 FULL`.
 
 ## Layout
 

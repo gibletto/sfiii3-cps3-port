@@ -135,7 +135,7 @@ static int fail(const char* message) {
 static void bottom_help(void) {
     consoleClear();
     if (!pictures) {
-        printf("\nSELECT coin, SELECT+START test menu\nSELECT+L service, SELECT+B quit\nSELECT+R buttons and region\n");
+        printf("\nSELECT coin, SELECT+START test menu\nSELECT+L service, SELECT+B quit\nSELECT+R buttons, region, screen\n");
     }
 }
 
@@ -226,6 +226,7 @@ int main(int argc, char** argv) {
     if (!ctr_video_init()) {
         return fail("The GPU renderer could not start.");
     }
+    ctr_video_set_shape(ctr_controls_shape());
     ctr_prefetch_start();
     cps3_chr_dma_defer = 1;     /* big character DMA transfers run while waiting for the vertical blank */
     if (!ctr_sound_init()) {
@@ -247,6 +248,10 @@ int main(int argc, char** argv) {
                 setup = 0;
                 bottom_help();
                 ctr_bottom_redraw();
+            }
+            if (ctr_video_set_shape(ctr_controls_shape())) {
+                ctr_video_render();     /* the same frame in the new shape */
+                continue;
             }
             gspWaitForVBlank();
             continue;
